@@ -8,6 +8,7 @@
   var BORRADOR_KEY = 'migym_borrador_v1'; // sesión en curso (por si cierras la app)
   var HIST_KEY = 'migym_historial_v1';  // historial local de sesiones (subidas o no)
   var HIST_MAX = 300;                   // tope de sesiones guardadas en el celular
+  var SECRETO_KEY = 'migym_secreto_v1'; // clave de sincronización, solo en este celular (nunca en el repo)
 
   // Estado de la sesión en curso
   var sesion = null; // { sesion_id, inicio, titulo, ejercicios:[{nombre,grupo,tipo,guia,series:[{peso,reps,altura_cm,segundos,hecha}]}] }
@@ -623,7 +624,7 @@
   function sincronizar() {
     var cola = leerCola();
     if (!cola.length) { marcarEstado('ok'); actualizarPendientes(); return; }
-    if (!CFG.EXEC_URL || !CFG.APP_SECRETO) {
+    if (!CFG.EXEC_URL) {
       marcarEstado('sinc');
       aviso('Guardado en el celular. Configura EXEC_URL para subir al Sheet.');
       actualizarPendientes();
@@ -635,7 +636,7 @@
     fetch(CFG.EXEC_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // text/plain evita el preflight CORS
-      body: JSON.stringify({ secreto: CFG.APP_SECRETO, sesiones: cola }),
+      body: JSON.stringify({ secreto: secretoParaSubir(), sesiones: cola }),
     })
       .then(function (r) { return r.json(); })
       .then(function (res) {
@@ -646,7 +647,12 @@
           aviso('Subido: ' + (res.sesiones || cola.length) + ' sesión(es).');
         } else {
           marcarEstado('error');
-          aviso('El servidor rechazó los datos: ' + (res && res.error || '?'), true);
+          if (/autoriz/i.test((res && res.error) || '')) {
+            localStorage.removeItem(SECRETO_KEY);
+            aviso('Clave incorrecta. La borré; te la pediré de nuevo al reintentar.', true);
+          } else {
+            aviso('El servidor rechazó los datos: ' + (res && res.error || '?'), true);
+          }
         }
         actualizarPendientes();
       })
@@ -666,6 +672,16 @@
   // ── Cola y borrador en localStorage ─────────────────────────────────────────
   function leerCola() { try { return JSON.parse(localStorage.getItem(COLA_KEY)) || []; } catch (e) { return []; } }
   function escribirCola(c) { localStorage.setItem(COLA_KEY, JSON.stringify(c)); }
+  // La clave sale de config.js si está (compatibilidad) o del almacén local del celular.
+  function obtenerSecreto() { return CFG.APP_SECRETO || localStorage.getItem(SECRETO_KEY) || ''; }
+  // Devuelve la clave; si no hay, la pide una vez y la guarda en este celular.
+  function secretoParaSubir() {
+    var s = obtenerSecreto();
+    if (s) return s;
+    s = (window.prompt('Clave de sincronización (te la piden una sola vez y queda guardada en este celular):') || '').trim();
+    if (s) localStorage.setItem(SECRETO_KEY, s);
+    return s;
+  }
   function leerHistorial() { try { return JSON.parse(localStorage.getItem(HIST_KEY)) || []; } catch (e) { return []; } }
   function escribirHistorial(h) { localStorage.setItem(HIST_KEY, JSON.stringify(h)); }
   // Marca en el historial las sesiones que acaban de subir bien (por sesion_id).
