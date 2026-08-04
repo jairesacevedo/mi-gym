@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b7ea3">
+  <title>Mi Gym</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="barra">
+    <h1>Mi Gym</h1>
+    <span id="estado" class="estado" title="Estado de sincronización">•</span>
+  </header>
+
+  <!-- Pantalla 1: elegir la sesión del día -->
+  <section id="pantalla-inicio" class="pantalla">
+    <p class="ayuda">Elige la sesión de hoy:</p>
+    <div id="lista-sesiones" class="tarjetas"></div>
+    <button id="btn-pendientes" class="secundario oculto"></button>
+    <button id="btn-historial" class="secundario">Ver historial</button>
+    <button id="btn-progreso" class="secundario">Progreso por ejercicio</button>
+    <button id="btn-resumen" class="secundario">Resumen semanal</button>
+  </section>
+
+  <!-- Pantalla Resumen semanal: esta semana vs la anterior -->
+  <section id="pantalla-resumen" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-res-volver" class="icono" aria-label="Volver">‹</button>
+      <div>
+        <strong>Resumen semanal</strong>
+        <span id="res-rango" class="crono-sesion"></span>
+      </div>
+    </div>
+    <p id="res-vacio" class="ayuda oculto">Aún no hay sesiones esta semana ni la anterior.</p>
+    <div id="res-metricas" class="res-metricas"></div>
+    <p id="res-descubiertos" class="res-aviso oculto"></p>
+    <h3 id="res-h-grupos" class="res-h oculto">Series por grupo</h3>
+    <div id="res-grupos"></div>
+  </section>
+
+  <!-- Pantalla Progreso: gráfica de progresión de un ejercicio -->
+  <section id="pantalla-progreso" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-prog-volver" class="icono" aria-label="Volver">‹</button>
+      <strong>Progreso</strong>
+    </div>
+    <select id="prog-ejercicio" class="prog-select" aria-label="Ejercicio"></select>
+    <p id="prog-vacio" class="ayuda oculto">Registra al menos una sesión para ver progreso.</p>
+    <div id="prog-resumen" class="prog-resumen"></div>
+    <div id="prog-chart"></div>
+    <div id="prog-tabla"></div>
+  </section>
+
+  <!-- Pantalla Historial: lista de sesiones guardadas -->
+  <section id="pantalla-historial" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-hist-volver" class="icono" aria-label="Volver">‹</button>
+      <strong>Historial</strong>
+    </div>
+    <div id="lista-historial" class="tarjetas"></div>
+    <p id="hist-vacio" class="ayuda oculto">Aún no hay sesiones guardadas.</p>
+  </section>
+
+  <!-- Pantalla Detalle: una sesión del historial (solo lectura) -->
+  <section id="pantalla-detalle" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-det-volver" class="icono" aria-label="Volver">‹</button>
+      <div>
+        <strong id="detalle-titulo"></strong>
+        <span id="detalle-sub" class="crono-sesion"></span>
+      </div>
+    </div>
+    <div id="detalle-cuerpo"></div>
+    <button id="btn-det-borrar" class="texto-peligro">Borrar del historial (no afecta el Sheet)</button>
+  </section>
+
+  <!-- Pantalla 2: registrar la sesión -->
+  <section id="pantalla-sesion" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-volver" class="icono" aria-label="Volver">‹</button>
+      <div>
+        <strong id="titulo-sesion"></strong>
+        <span id="crono-sesion" class="crono-sesion">00:00</span>
+      </div>
+    </div>
+
+    <div id="lista-ejercicios"></div>
+
+    <button id="btn-agregar-ejercicio" class="secundario">+ Añadir ejercicio</button>
+
+    <div class="pie-acciones">
+      <button id="btn-guardar" class="primario">Guardar sesión</button>
+      <button id="btn-descartar" class="texto-peligro">Descartar</button>
+    </div>
+  </section>
+
+  <!-- Cronómetro de descanso flotante -->
+  <div id="descanso" class="descanso oculto">
+    <span id="descanso-tiempo">01:30</span>
+    <div class="descanso-btns">
+      <button id="descanso-menos">−15s</button>
+      <button id="descanso-mas">+15s</button>
+      <button id="descanso-saltar">Saltar</button>
+    </div>
+  </div>
+
+  <!-- Hoja para elegir un ejercicio del catálogo -->
+  <div id="selector" class="modal oculto">
+    <div class="modal-caja">
+      <input id="selector-buscar" type="text" placeholder="Buscar ejercicio…" autocomplete="off">
+      <div id="selector-lista" class="selector-lista"></div>
+      <button id="selector-cerrar" class="secundario">Cerrar</button>
+    </div>
+  </div>
+
+  <div id="aviso" class="aviso oculto"></div>
+
+  <script src="config.js"></script>
+  <script src="catalogo.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
