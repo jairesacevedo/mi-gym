@@ -99,10 +99,23 @@ button { font: inherit; border: none; border-radius: 12px; cursor: pointer; }
 .chip.nuevo { background: rgba(46,158,91,.15); color: var(--ok); }
 .guia { color: var(--suave); font-size: .82rem; margin: 4px 0 10px; }
 
+/* Última vez + sugerencia de progresión */
+.ultima { color: var(--suave); font-size: .8rem; margin: -4px 0 6px; }
+.sugerencia {
+  display: inline-block; margin: 0 0 8px; padding: 4px 10px; border-radius: 20px;
+  background: rgba(11,126,163,.12); color: var(--aqua); font-size: .82rem; font-weight: 600;
+}
+
 /* Filas de series */
 .serie {
+  position: relative;
   display: grid; grid-template-columns: 26px 1fr 1fr auto; gap: 8px; align-items: center;
   padding: 6px 0; border-top: 1px solid var(--borde);
+}
+.serie.pr::after {
+  content: '★ PR'; position: absolute; top: -7px; right: 6px;
+  background: #f2b705; color: #3a2c00; font-size: .62rem; font-weight: 700;
+  padding: 1px 8px; border-radius: 20px; letter-spacing: .04em;
 }
 .serie.tipo-tiempo, .serie.tipo-reps { grid-template-columns: 26px 1fr auto; }
 .serie .n { color: var(--suave); font-size: .85rem; text-align: center; }
@@ -190,6 +203,14 @@ button { font: inherit; border: none; border-radius: 12px; cursor: pointer; }
 }
 .res-g-nom { font-weight: 600; }
 .res-g-val { color: var(--suave); font-size: .85rem; font-variant-numeric: tabular-nums; }
+
+/* Récords */
+.rec-fila {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 11px 0; border-top: 1px solid var(--borde);
+}
+.rec-nom { font-weight: 600; }
+.rec-val { color: var(--aqua); font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
 
 /* Cronómetro de descanso */
 .descanso {

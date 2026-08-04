@@ -385,6 +385,30 @@
     catch (e) { return ''; }
   }
 
+  // ── Récords personales ──────────────────────────────────────────────────────
+  function abrirRecords() {
+    ocultar('pantalla-inicio'); ocultar('pantalla-historial'); ocultar('pantalla-detalle');
+    ocultar('pantalla-progreso'); ocultar('pantalla-resumen');
+    mostrar('pantalla-records');
+    var lista = ejerciciosDeHistorial();
+    var cont = $('lista-records'); cont.innerHTML = '';
+    $('records-vacio').classList.toggle('oculto', lista.length > 0);
+    lista.forEach(function (nombre) {
+      var st = statsEjercicio(nombre);
+      var fila = el('div', 'rec-fila');
+      fila.appendChild(el('span', 'rec-nom', nombre));
+      fila.appendChild(el('span', 'rec-val', recMarca_(st)));
+      cont.appendChild(fila);
+    });
+  }
+
+  function recMarca_(st) {
+    if (st.tipo === 'peso_reps') return (st.mejorPeso || 0) + ' kg' + (st.mejorE1rm ? '  ·  e1RM ' + st.mejorE1rm : '');
+    if (st.tipo === 'pliometria') return st.mejorAltura ? st.mejorAltura + ' cm' : (st.mejorReps || 0) + ' reps';
+    if (st.tipo === 'tiempo') return (st.mejorSeg || 0) + ' s';
+    return (st.mejorReps || 0) + ' reps';
+  }
+
   // ── Iniciar / construir sesión ──────────────────────────────────────────────
   function iniciarSesion(plantilla) {
     sesion = {
@@ -399,7 +423,7 @@
 
   function clonarEjercicio(e) {
     var ej = {
-      nombre: e.nombre, grupo: e.grupo, tipo: e.tipo,
+      nombre: e.nombre, grupo: e.grupo, tipo: e.tipo, reps: e.reps || '',
       guia: (e.series || '') + ' × ' + (e.reps || '') + '  ·  descanso ' + fmtTiempo(e.descanso || 90),
       descanso: e.descanso || 90, nuevo: !!e.nuevo, series: [],
     };
@@ -426,6 +450,84 @@
     }, 1000);
   }
 
+  // ── Estadísticas por ejercicio (última vez · récords · PR · sugerencia) ──────
+  var INC_KG = 2.5; // subida por defecto cuando llegas al tope del rango (tu regla)
+
+  // Recorre el historial local y resume un ejercicio: la última vez que lo hiciste
+  // (su serie tope) y tus mejores marcas de siempre.
+  function statsEjercicio(nombre) {
+    var st = { tipo: null, ultima: null, mejorPeso: 0, mejorReps: 0, mejorAltura: 0, mejorSeg: 0, mejorE1rm: 0 };
+    leerHistorial().forEach(function (h) { // el historial viene de más nuevo a más viejo
+      var sets = h.payload.sets.filter(function (s) { return s.ej === nombre; });
+      if (!sets.length) return;
+      if (!st.tipo) st.tipo = sets[0].tipo;
+      if (!st.ultima) st.ultima = { fecha: h.payload.fecha, top: topSet_(sets, st.tipo) };
+      sets.forEach(function (s) {
+        var p = num(s.peso) || 0, r = num(s.reps) || 0, a = num(s.altura_cm) || 0, g = num(s.segundos) || 0;
+        if (p > st.mejorPeso) st.mejorPeso = p;
+        if (r > st.mejorReps) st.mejorReps = r;
+        if (a > st.mejorAltura) st.mejorAltura = a;
+        if (g > st.mejorSeg) st.mejorSeg = g;
+        if (p > 0 && r > 0) { var e = p * (1 + r / 30); if (e > st.mejorE1rm) st.mejorE1rm = e; }
+      });
+    });
+    st.mejorE1rm = redondear(st.mejorE1rm);
+    return st;
+  }
+
+  function topSet_(sets, tipo) {
+    if (tipo === 'tiempo') return sets.reduce(function (b, s) { return (num(s.segundos) || 0) > (num(b.segundos) || 0) ? s : b; });
+    if (tipo === 'reps') return sets.reduce(function (b, s) { return (num(s.reps) || 0) > (num(b.reps) || 0) ? s : b; });
+    if (tipo === 'pliometria') return sets.reduce(function (b, s) { return (num(s.altura_cm) || 0) > (num(b.altura_cm) || 0) ? s : b; });
+    return sets.reduce(function (b, s) {
+      var bp = num(b.peso) || 0, sp = num(s.peso) || 0;
+      if (sp > bp) return s;
+      if (sp === bp && (num(s.reps) || 0) > (num(b.reps) || 0)) return s;
+      return b;
+    });
+  }
+
+  // ¿La serie que acabas de meter supera tu mejor marca previa? (solo si ya hay historia)
+  function esPR(stats, serie, tipo) {
+    if (!stats || !stats.ultima) return false;
+    var p = num(serie.peso) || 0, r = num(serie.reps) || 0, a = num(serie.altura_cm) || 0, g = num(serie.segundos) || 0;
+    if (tipo === 'peso_reps') return p > 0 && r > 0 && (p > stats.mejorPeso + 1e-9 || p * (1 + r / 30) > stats.mejorE1rm + 1e-9);
+    if (tipo === 'pliometria') return a > 0 ? a > stats.mejorAltura + 1e-9 : r > stats.mejorReps;
+    if (tipo === 'reps') return r > stats.mejorReps;
+    if (tipo === 'tiempo') return g > stats.mejorSeg;
+    return false;
+  }
+
+  function prTexto_(stats, tipo) {
+    if (tipo === 'peso_reps') return stats.mejorPeso ? stats.mejorPeso + ' kg' : '';
+    if (tipo === 'pliometria') return stats.mejorAltura ? stats.mejorAltura + ' cm' : (stats.mejorReps ? stats.mejorReps + ' reps' : '');
+    if (tipo === 'reps') return stats.mejorReps ? stats.mejorReps + ' reps' : '';
+    if (tipo === 'tiempo') return stats.mejorSeg ? stats.mejorSeg + ' s' : '';
+    return '';
+  }
+
+  function lineaUltima_(ej, stats) {
+    var t = stats.ultima.top, tipo = ej.tipo, txt;
+    if (tipo === 'peso_reps') txt = 'Última vez: ' + (num(t.peso) || 0) + ' kg × ' + (num(t.reps) || 0);
+    else if (tipo === 'pliometria') txt = 'Última vez: ' + (num(t.reps) || 0) + (num(t.altura_cm) ? ' × ' + num(t.altura_cm) + ' cm' : ' reps');
+    else if (tipo === 'reps') txt = 'Última vez: ' + (num(t.reps) || 0) + ' reps';
+    else txt = 'Última vez: ' + (num(t.segundos) || 0) + ' s';
+    var pr = prTexto_(stats, tipo);
+    return pr ? txt + '  ·  PR ' + pr : txt;
+  }
+
+  // Sugerencia de progresión (solo fuerza): si el tope del rango se cumplió, +2.5 kg.
+  function sugerencia_(ej, stats) {
+    if (ej.tipo !== 'peso_reps' || !stats.ultima) return null;
+    var t = stats.ultima.top, peso = num(t.peso) || 0, reps = num(t.reps) || 0;
+    if (peso <= 0) return null;
+    var nums = String(ej.reps || '').match(/\d+/g);
+    var tope = nums ? +nums[nums.length - 1] : null;
+    if (tope && reps >= tope) return 'Hoy: sube a ' + (peso + INC_KG) + ' kg';
+    if (tope) return 'Hoy: ' + peso + ' kg · apunta a ' + tope + ' reps';
+    return 'Hoy: ' + peso + ' kg';
+  }
+
   // ── Pintar ejercicios y series ──────────────────────────────────────────────
   function pintarEjercicios() {
     var cont = $('lista-ejercicios');
@@ -444,8 +546,15 @@
     caja.appendChild(cab);
     caja.appendChild(el('div', 'guia', ej.guia));
 
+    var stats = statsEjercicio(ej.nombre);
+    if (stats.ultima) {
+      caja.appendChild(el('div', 'ultima', lineaUltima_(ej, stats)));
+      var sug = sugerencia_(ej, stats);
+      if (sug) caja.appendChild(el('div', 'sugerencia', sug));
+    }
+
     ej.series.forEach(function (serie, si) {
-      caja.appendChild(filaSerie(ej, idx, serie, si));
+      caja.appendChild(filaSerie(ej, idx, serie, si, stats));
     });
 
     var add = el('button', 'add-serie', '+ serie');
@@ -458,9 +567,11 @@
     return caja;
   }
 
-  function filaSerie(ej, idx, serie, si) {
+  function filaSerie(ej, idx, serie, si, stats) {
     var fila = el('div', 'serie tipo-' + ej.tipo);
     fila.appendChild(el('span', 'n', si + 1));
+    function revisarPR() { fila.classList.toggle('pr', esPR(stats, serie, ej.tipo)); }
+    fila.addEventListener('input', revisarPR); // el input del campo actualiza serie[] antes de burbujear aquí
 
     if (ej.tipo === 'tiempo') {
       fila.appendChild(campoNum(serie, 'segundos', 'seg'));
@@ -480,9 +591,11 @@
       check.className = 'check' + (serie.hecha ? ' hecha' : '');
       check.textContent = serie.hecha ? '✓' : '○';
       guardarBorrador();
+      revisarPR();
       if (serie.hecha) iniciarDescanso(ej.descanso);
     });
     fila.appendChild(check);
+    revisarPR(); // por si vuelves a una sesión con valores del borrador
     return fila;
   }
 
@@ -739,6 +852,9 @@
 
     $('btn-resumen').addEventListener('click', abrirResumen);
     $('btn-res-volver').addEventListener('click', function () { ocultar('pantalla-resumen'); mostrar('pantalla-inicio'); pintarInicio(); });
+
+    $('btn-records').addEventListener('click', abrirRecords);
+    $('btn-rec-volver').addEventListener('click', function () { ocultar('pantalla-records'); mostrar('pantalla-inicio'); pintarInicio(); });
 
     $('descanso-menos').addEventListener('click', function () { descansoRestante = Math.max(0, descansoRestante - 15); pintarDescanso(); });
     $('descanso-mas').addEventListener('click', function () { descansoRestante += 15; pintarDescanso(); });

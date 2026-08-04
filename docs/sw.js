@@ -1,6 +1,6 @@
 /* sw.js — Service worker. Cachea el shell para que la app abra sin señal.
    Sube el número de CACHE cuando cambies archivos para forzar recarga. */
-var CACHE = 'migym-v6';
+var CACHE = 'migym-v7';
 var SHELL = [
   './',
   './index.html',
