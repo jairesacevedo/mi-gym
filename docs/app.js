@@ -467,7 +467,7 @@
       fila.appendChild(campoNum(serie, 'reps', 'reps'));
     } else if (ej.tipo === 'pliometria') {
       fila.appendChild(campoNum(serie, 'reps', 'reps'));
-      fila.appendChild(campoNum(serie, 'altura_cm', 'cm cajón'));
+      fila.appendChild(campoNum(serie, 'altura_cm', 'cm'));
     } else { // peso_reps
       fila.appendChild(campoNum(serie, 'peso', 'kg'));
       fila.appendChild(campoNum(serie, 'reps', 'reps'));
@@ -491,7 +491,7 @@
     inp.type = 'number';
     inp.inputMode = 'decimal';
     inp.value = serie[campo];
-    inp.placeholder = unidad;
+    inp.setAttribute('aria-label', unidad);
     inp.addEventListener('input', function () { serie[campo] = inp.value; guardarBorrador(); });
     wrap.appendChild(inp);
     wrap.appendChild(el('span', 'u', unidad));
