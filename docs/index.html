@@ -17,13 +17,23 @@
 
   <!-- Pantalla 1: elegir la sesión del día -->
   <section id="pantalla-inicio" class="pantalla">
+    <!-- Panel de arranque: cómo va la semana de un vistazo -->
+    <div id="inicio-panel" class="panel oculto">
+      <div id="inicio-tiles" class="tiles"></div>
+      <div id="inicio-spark" class="spark"></div>
+      <small id="inicio-spark-pie" class="panel-pie"></small>
+    </div>
+
     <p class="ayuda">Elige la sesión de hoy:</p>
     <div id="lista-sesiones" class="tarjetas"></div>
     <button id="btn-pendientes" class="secundario oculto"></button>
-    <button id="btn-historial" class="secundario">Ver historial</button>
-    <button id="btn-progreso" class="secundario">Progreso por ejercicio</button>
-    <button id="btn-resumen" class="secundario">Resumen semanal</button>
-    <button id="btn-records" class="secundario">Récords personales</button>
+
+    <nav class="nav-grid">
+      <button id="btn-historial" class="nav-btn"><span class="nav-ico">🗂️</span>Historial</button>
+      <button id="btn-progreso" class="nav-btn"><span class="nav-ico">📈</span>Progreso</button>
+      <button id="btn-resumen" class="nav-btn"><span class="nav-ico">📊</span>Resumen</button>
+      <button id="btn-records" class="nav-btn"><span class="nav-ico">🏅</span>Récords</button>
+    </nav>
   </section>
 
   <!-- Pantalla Récords: mejores marcas por ejercicio -->
@@ -32,11 +42,12 @@
       <button id="btn-rec-volver" class="icono" aria-label="Volver">‹</button>
       <strong>Récords personales</strong>
     </div>
+    <div id="rec-filtros" class="chips-fila"></div>
     <p id="records-vacio" class="ayuda oculto">Aún no hay marcas. Registra sesiones y aquí verás tus PRs.</p>
     <div id="lista-records"></div>
   </section>
 
-  <!-- Pantalla Resumen semanal: esta semana vs la anterior -->
+  <!-- Pantalla Resumen semanal: esta semana vs la anterior + tendencias -->
   <section id="pantalla-resumen" class="pantalla oculto">
     <div class="barra-sesion">
       <button id="btn-res-volver" class="icono" aria-label="Volver">‹</button>
@@ -48,20 +59,36 @@
     <p id="res-vacio" class="ayuda oculto">Aún no hay sesiones esta semana ni la anterior.</p>
     <div id="res-metricas" class="res-metricas"></div>
     <p id="res-descubiertos" class="res-aviso oculto"></p>
+
+    <h3 id="res-h-tend" class="res-h oculto">Tendencia (8 semanas)</h3>
+    <div id="res-chips" class="chips-fila"></div>
+    <div id="res-chart" class="caja-chart"></div>
+
     <h3 id="res-h-grupos" class="res-h oculto">Series por grupo</h3>
     <div id="res-grupos"></div>
+
+    <h3 id="res-h-prs" class="res-h oculto">Récords de esta semana</h3>
+    <div id="res-prs"></div>
   </section>
 
-  <!-- Pantalla Progreso: gráfica de progresión de un ejercicio -->
+  <!-- Pantalla Progreso: gráficas de progresión de un ejercicio -->
   <section id="pantalla-progreso" class="pantalla oculto">
     <div class="barra-sesion">
       <button id="btn-prog-volver" class="icono" aria-label="Volver">‹</button>
       <strong>Progreso</strong>
     </div>
-    <select id="prog-ejercicio" class="prog-select" aria-label="Ejercicio"></select>
+    <div id="prog-cab" class="prog-cab">
+      <div id="prog-ilus" class="ej-ilus grande"></div>
+      <select id="prog-ejercicio" class="prog-select" aria-label="Ejercicio"></select>
+    </div>
     <p id="prog-vacio" class="ayuda oculto">Registra al menos una sesión para ver progreso.</p>
+    <div id="prog-chips" class="chips-fila"></div>
     <div id="prog-resumen" class="prog-resumen"></div>
-    <div id="prog-chart"></div>
+    <div id="prog-chart" class="caja-chart"></div>
+    <div id="prog-tiles" class="tiles"></div>
+    <h3 id="prog-h-vol" class="res-h oculto">Volumen por sesión</h3>
+    <div id="prog-chart2" class="caja-chart"></div>
+    <h3 id="prog-h-hist" class="res-h oculto">Últimas sesiones, serie a serie</h3>
     <div id="prog-tabla"></div>
   </section>
 
@@ -71,6 +98,7 @@
       <button id="btn-hist-volver" class="icono" aria-label="Volver">‹</button>
       <strong>Historial</strong>
     </div>
+    <div id="hist-tiles" class="tiles"></div>
     <div id="lista-historial" class="tarjetas"></div>
     <p id="hist-vacio" class="ayuda oculto">Aún no hay sesiones guardadas.</p>
   </section>
@@ -84,7 +112,10 @@
         <span id="detalle-sub" class="crono-sesion"></span>
       </div>
     </div>
+    <div id="detalle-tiles" class="tiles"></div>
+    <div id="detalle-grupos" class="barras-grupo"></div>
     <div id="detalle-cuerpo"></div>
+    <button id="btn-det-repetir" class="secundario">Repetir esta sesión</button>
     <button id="btn-det-borrar" class="texto-peligro">Borrar del historial (no afecta el Sheet)</button>
   </section>
 
@@ -96,6 +127,13 @@
         <strong id="titulo-sesion"></strong>
         <span id="crono-sesion" class="crono-sesion">00:00</span>
       </div>
+    </div>
+
+    <div id="sesion-tiles" class="tiles compactas"></div>
+    <div id="sesion-barra-prog" class="barra-prog"><span></span></div>
+    <div class="chips-fila">
+      <button id="chip-rpe" class="chip-btn" title="Registrar esfuerzo percibido (1-10) por serie">RPE</button>
+      <button id="chip-notas" class="chip-btn" title="Añadir una nota a cada ejercicio">Notas</button>
     </div>
 
     <div id="lista-ejercicios"></div>
@@ -131,6 +169,7 @@
 
   <script src="config.js"></script>
   <script src="catalogo.js"></script>
+  <script src="ilustraciones.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

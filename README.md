@@ -10,9 +10,15 @@ el informe semanal de salud.
 
 - Registrar series por sesión (fuerza, pliometría, isométricos, peso corporal) con
   cronómetro de descanso.
+- **La sesión anterior, serie por serie**: en cada ejercicio ves el peso y las reps de
+  cada serie de la última vez, como pista dentro de las casillas, y con un toque las
+  copias para arrancar desde ahí.
+- **Armar la sesión sobre la marcha**: añadir o quitar ejercicios, y subir o bajar series.
+- **Dibujo de cada ejercicio** (vectorial, funciona sin señal).
+- Marcadores en vivo de la sesión, **RPE** y **notas** opcionales por ejercicio.
+- **Historial** con detalle de cada sesión, **progreso por ejercicio** (varias métricas y
+  gráficas), **resumen semanal** con tendencia de 8 semanas y **récords personales**.
 - Funciona **sin señal**: guarda en el celular y sincroniza al volver el internet.
-- **Historial** de sesiones, **progreso por ejercicio** (gráficas) y **resumen semanal**
-  comparando con la semana anterior.
 - Instalable en la pantalla de inicio (PWA).
 
 ## Estructura

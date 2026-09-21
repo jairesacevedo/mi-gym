@@ -13,6 +13,7 @@ APP-EJERCICIOS/  (repo mi-gym)
 │  ├─ styles.css
 │  ├─ app.js
 │  ├─ catalogo.js          ← tus ejercicios (edítalo cuando quieras)
+│  ├─ ilustraciones.js     ← los dibujos de cada ejercicio (SVG, sin descargas)
 │  ├─ config.js            ← pega aquí la URL y el secreto (paso 2)
 │  ├─ manifest.webmanifest
 │  ├─ sw.js
@@ -98,16 +99,42 @@ Espera ~1 minuto y GitHub Pages republica solo. Si cambiaste código, **sube el 
 
 ## Cómo se usa
 
-1. Elige la sesión del día (Upper A / Lower A / Upper B / Lower B) o **Libre**.
-2. Por cada ejercicio, escribe **peso y reps** (o reps + altura de cajón en pliometría, o
-   segundos en planchas) y toca el **círculo** para marcar la serie hecha → arranca el
-   **cronómetro de descanso**.
-3. `+ serie` añade una serie; `+ Añadir ejercicio` mete cualquiera del catálogo.
-4. **Guardar sesión** al terminar. Si hay internet, sube al Sheet; si no, queda en cola y
+1. Elige la sesión del día (Upper A / Lower A / Upper B / Lower B) o **Libre**. La que
+   toca según tu rotación viene marcada como **sugerida**.
+2. Cada ejercicio muestra arriba la **sesión anterior serie por serie** (`1 69 kg × 8`,
+   `2 69 kg × 8`, …) con su fecha, el volumen que hiciste y tu mejor marca. Esos mismos
+   valores aparecen en gris dentro de las casillas: escribe encima solo lo que cambie, o
+   toca **↺ repetir** para copiarlos todos de una vez.
+3. Escribe **peso y reps** (o reps + altura de cajón en pliometría, o segundos en
+   planchas) y toca el **círculo** para marcar la serie hecha → arranca el
+   **cronómetro de descanso**. Si superas tu mejor marca sale un **★ PR**, y si mejoras
+   la serie equivalente de la vez pasada la fila se marca en verde.
+4. Para ajustar la sesión: `+ serie` / `− serie` al pie de cada ejercicio, la **✕** de cada
+   fila quita esa serie, la **✕** del encabezado quita el ejercicio completo, y
+   `+ Añadir ejercicio` mete cualquiera del catálogo (o de lo que ya hayas registrado).
+5. Los chips **RPE** y **Notas** (arriba de la lista) añaden una casilla de esfuerzo
+   percibido por serie y una nota por ejercicio. Se guardan en las columnas `RPE` y `Nota`
+   de la pestaña **Ejercicios**. Quedan como los dejes: es una preferencia del celular.
+6. **Guardar sesión** al terminar. Si hay internet, sube al Sheet; si no, queda en cola y
    sube sola cuando vuelva la señal (indicador arriba a la derecha: `↑` subiendo, `✓` ok, `!` error).
 
 El punto/indicador de arriba a la derecha te dice el estado. Las sesiones pendientes también
 aparecen como botón en la pantalla de inicio.
+
+## Lo que puedes mirar
+
+- **Inicio** — sesiones, volumen, series de la semana, racha de semanas seguidas y el
+  volumen de las últimas 8 semanas en miniatura.
+- **Historial** — acumulados de siempre y, en cada sesión, el reparto de series por grupo.
+  Al abrir una: duración, volumen, reps, series de cada ejercicio y el botón
+  **Repetir esta sesión** (la vuelve a armar igual para hoy).
+- **Progreso** — eliges ejercicio y métrica (e1RM, peso máximo, volumen, reps… según el
+  tipo), y salen la línea de progresión, tus mejores marcas y las últimas 8 sesiones
+  serie a serie.
+- **Resumen semanal** — esta semana contra la anterior, tendencia de 8 semanas con la
+  métrica que quieras, series por grupo y los récords que hiciste en la semana.
+- **Récords** — tu mejor marca por ejercicio, filtrable por grupo; tocando uno vas a su
+  progreso.
 
 ---
 
@@ -121,9 +148,22 @@ Todo tu banco de ejercicios está en `docs/catalogo.js`. Cada ejercicio es:
 
 - `tipo`: `peso_reps` (peso+reps) · `reps` (solo reps) · `tiempo` (segundos) · `pliometria` (reps+altura cm).
 - `descanso` en **segundos** (lo usa el cronómetro).
+- `img` (opcional): URL de una foto para ese ejercicio. Si no la pones —lo normal— la app
+  usa el dibujo vectorial que le toque.
 - Añade o cambia lo que quieras. Tras editar, haz `git push` y **sube el número de
-  `CACHE` en `docs/sw.js`** (va en `migym-v4`; súbelo a `migym-v5`, etc.) para que el celular
+  `CACHE` en `docs/sw.js`** (va en `migym-v8`; súbelo a `migym-v9`, etc.) para que el celular
   tome la versión nueva.
+
+### Los dibujos de los ejercicios
+
+Están en `docs/ilustraciones.js`, dibujados a mano en SVG: no se descarga nada, pesan casi
+nada y se ven bien en tema claro y oscuro. La app elige el dibujo buscando el nombre del
+ejercicio en la lista `PATRONES` (sin acentos ni mayúsculas) y, si no encuentra nada, usa
+el del grupo (Empuje, Tirón, Piernas, Core, Pliometría).
+
+Si añades un ejercicio y sale el dibujo genérico, tienes dos opciones: agregar una palabra
+suya a un patrón que ya exista (`[/pulldown|jalon/, 'jalon']`) o dibujar uno nuevo en
+`DIBUJOS` y registrarlo en `PATRONES`.
 
 Los nombres deben coincidir con los patrones de `CFG.gruposFuerza` en `InformeSalud.gs` para
 que el informe los clasifique bien. Si registras un ejercicio nuevo que cae en "Otros", añade
