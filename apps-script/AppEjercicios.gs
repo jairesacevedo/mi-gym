@@ -44,7 +44,12 @@ function doPost(e) {
     var guardadas = 0, filas = 0;
     sesiones.forEach(function (s) {
       var n = guardarSesion_(s);
-      if (n > 0) { guardadas++; filas += n; }
+      if (n > 0) {
+        guardadas++; filas += n;
+        // Solo al primer guardado (n>0): marca el día en la tabla diaria. Un try/catch
+        // aísla esa escritura para que jamás tumbe el guardado de la sesión (lo crítico).
+        try { marcarDiaEntrenado_(s); } catch (err2) { Logger.log('marcarDiaEntrenado_ falló: ' + err2); }
+      }
     });
 
     return jsonSalida_({ ok: true, sesiones: guardadas, filas: filas });
@@ -191,6 +196,96 @@ function numeroApp_(v) {
   return isNaN(n) ? null : n;
 }
 
+// ── MARCAR EL DÍA EN LA TABLA DIARIA (tu "matriz de seguimiento") ─────────────
+// Cuando se guarda una sesión NUEVA, deja registrado el día en la tabla diaria del
+// Sheet (la de una fila por día: Fecha, Dia, Pasos, ... Entreno, Tipo, Duracion_min).
+// Así el día de gym queda en tu matriz sin doble digitación, igual que lo marcabas a
+// mano en la época de Lyfta. Escribe SOLO tres columnas —Entreno, Tipo, Duracion_min—
+// y no toca ninguna otra (FC, pasos, sueño, notas). Es idempotente por fecha.
+var APP_MARCAR_DIARIO = true;       // pon false para desactivar esta escritura
+var APP_TIPO_DIARIO   = 'Gimnasio'; // OJO: debe ser una de CFG.tiposFuerza (pierna/pesas/
+                                    // fuerza/gym/gimnasio) o el informe lo contaría como
+                                    // cardio y habría doble conteo. El título de la sesión NO sirve.
+
+function marcarDiaEntrenado_(s) {
+  if (!APP_MARCAR_DIARIO || !s || !s.fecha) return;
+
+  var t = ubicarTablaDiaria_();
+  if (!t) { Logger.log('No se encontró la tabla diaria (Fecha + Pasos).'); return; }
+
+  var hoja = t.sheet, col = t.col;
+  var iFecha = col['fecha'];
+  if (iFecha === undefined) return;
+  var iDia = col['dia'], iEntreno = col['entreno'], iTipo = col['tipo'], iDur = col['duracion_min'];
+
+  var fechaSesion = new Date(s.fecha);
+  var claveDia = fechaBogota_(fechaSesion);                 // 'yyyy-MM-dd' en hora Bogotá
+  var durMin = numeroApp_(s.durMin != null ? s.durMin : s.duracion_min);
+
+  var headerRow1 = t.headerRow + 1;   // fila 1-based del encabezado
+  var firstData1 = t.headerRow + 2;   // fila 1-based de la primera fila de datos
+  var lastRow = hoja.getLastRow();
+  var ultimaData = headerRow1;        // 1-based: última fila con fecha (si no hay datos, el header)
+  var encontrada = 0;
+
+  if (lastRow >= firstData1) {
+    var fechas = hoja.getRange(firstData1, iFecha + 1, lastRow - firstData1 + 1, 1).getValues();
+    for (var i = 0; i < fechas.length; i++) {
+      var celda = fechas[i][0];
+      if (celda === '' || celda == null) break;             // la tabla termina en la 1a fila sin fecha
+      var fEval = (celda instanceof Date) ? celda : new Date(celda);
+      if (isNaN(fEval.getTime())) break;
+      ultimaData = firstData1 + i;
+      if (fechaBogota_(fEval) === claveDia) { encontrada = firstData1 + i; break; }
+    }
+  }
+
+  var fila = encontrada || (ultimaData + 1);
+  if (!encontrada) {
+    // Crea la fila del día justo después de la última con fecha, conservando el orden.
+    hoja.insertRowsAfter(ultimaData, 1);
+    hoja.getRange(fila, iFecha + 1).setValue(fechaSoloDia_(fechaSesion));
+    if (iDia !== undefined) hoja.getRange(fila, iDia + 1).setValue(diaLetra_(fechaSesion));
+  }
+  if (iEntreno !== undefined) hoja.getRange(fila, iEntreno + 1).setValue(1);
+  if (iTipo !== undefined) hoja.getRange(fila, iTipo + 1).setValue(APP_TIPO_DIARIO);
+  if (iDur !== undefined && durMin != null) hoja.getRange(fila, iDur + 1).setValue(durMin);
+}
+
+// Localiza la tabla diaria: la primera pestaña cuyo encabezado tenga Fecha Y Pasos
+// (misma heurística que leerSheet del informe; la pestaña Ejercicios y la de
+// composición no la cumplen). Devuelve { sheet, headerRow (0-based), col }.
+function ubicarTablaDiaria_() {
+  var ss = SpreadsheetApp.openById(CFG.sheetId);
+  var sheets = ss.getSheets();
+  for (var h = 0; h < sheets.length; h++) {
+    var values = sheets[h].getDataRange().getValues();
+    for (var r = 0; r < values.length; r++) {
+      var col = {};
+      values[r].forEach(function (celda, c) { var k = normApp_(celda); if (k) col[k] = c; });
+      if (col['fecha'] !== undefined && col['pasos'] !== undefined) {
+        return { sheet: sheets[h], headerRow: r, col: col };
+      }
+    }
+  }
+  return null;
+}
+
+function fechaBogota_(d) { return Utilities.formatDate(d, 'America/Bogota', 'yyyy-MM-dd'); }
+
+// Fecha del día de la sesión, anclada al MEDIODÍA de Bogotá (Colombia es UTC-5 fijo,
+// sin horario de verano). Así la celda muestra el día calendario correcto sin importar
+// la zona horaria del script ni la del Sheet (medianoche se corría un día al mostrarse).
+function fechaSoloDia_(d) {
+  return new Date(fechaBogota_(d) + 'T12:00:00-05:00'); // 'yyyy-MM-ddT12:00:00-05:00'
+}
+
+// Inicial del día como en la tabla: L M X J V S D.
+function diaLetra_(d) {
+  var u = Number(Utilities.formatDate(d, 'America/Bogota', 'u')); // 1=Lun .. 7=Dom
+  return ['L', 'M', 'X', 'J', 'V', 'S', 'D'][u - 1] || '';
+}
+
 // ── PRUEBA MANUAL (Ejecutar → pruebaAppEjercicios) ────────────────────────────
 function pruebaAppEjercicios() {
   var sesion = {
@@ -207,6 +302,12 @@ function pruebaAppEjercicios() {
 
   var n = guardarSesion_(sesion);
   Logger.log('Filas escritas: ' + n);
+
+  if (n > 0) {
+    marcarDiaEntrenado_(sesion);
+    Logger.log('>>> Revisa la tabla diaria: el día ' + fechaBogota_(new Date(sesion.fecha)) +
+               ' debe quedar con Entreno=1, Tipo=' + APP_TIPO_DIARIO + ', Duracion_min=' + sesion.durMin + '.');
+  }
 
   var sesiones = leerSesionesFuerza_();
   var ultima = sesiones[sesiones.length - 1];
