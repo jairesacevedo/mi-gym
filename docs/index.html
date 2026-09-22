@@ -3,107 +3,193 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b7ea3">
+  <meta name="theme-color" content="#0c1017">
   <title>Mi Gym</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="apple-touch-icon" href="icons/icon-192.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+
+  <!-- Barra Superior Fija -->
   <header class="barra">
-    <h1>Mi Gym</h1>
-    <span id="estado" class="estado" title="Estado de sincronización">•</span>
+    <div class="barra-logo">
+      <span>⚡</span> Mi Gym
+    </div>
+    <div class="barra-lado">
+      <span id="estado" class="estado" title="Estado de sincronización"></span>
+      <button id="btn-top-ajustes" class="btn-icono-top" aria-label="Ajustes" title="Ajustes">⚙️</button>
+    </div>
   </header>
 
-  <!-- Pantalla 1: elegir la sesión del día -->
-  <section id="pantalla-inicio" class="pantalla">
-    <!-- Panel de arranque: cómo va la semana de un vistazo -->
-    <div id="inicio-panel" class="panel oculto">
-      <div id="inicio-tiles" class="tiles"></div>
-      <div id="inicio-spark" class="spark"></div>
-      <small id="inicio-spark-pie" class="panel-pie"></small>
+  <!-- Banner Flotante de Sesión en Curso (visible cuando el usuario navega a otras pestañas durante el entreno) -->
+  <div id="banner-sesion-activa" class="banner-activa oculto">
+    <div class="banner-activa-txt">
+      <span id="banner-activa-tit" class="banner-activa-tit">Sesión en curso</span>
+      <span id="banner-activa-sub" class="banner-activa-sub">00:00 · 0 series</span>
     </div>
+    <button id="banner-activa-btn" class="banner-activa-btn">Continuar ›</button>
+  </div>
 
-    <p class="ayuda">Elige la sesión de hoy:</p>
-    <div id="lista-sesiones" class="tarjetas"></div>
-    <button id="btn-pendientes" class="secundario oculto"></button>
-
-    <nav class="nav-grid">
-      <button id="btn-historial" class="nav-btn"><span class="nav-ico">🗂️</span>Historial</button>
-      <button id="btn-progreso" class="nav-btn"><span class="nav-ico">📈</span>Progreso</button>
-      <button id="btn-resumen" class="nav-btn"><span class="nav-ico">📊</span>Resumen</button>
-      <button id="btn-records" class="nav-btn"><span class="nav-ico">🏅</span>Récords</button>
-    </nav>
-  </section>
-
-  <!-- Pantalla Récords: mejores marcas por ejercicio -->
-  <section id="pantalla-records" class="pantalla oculto">
-    <div class="barra-sesion">
-      <button id="btn-rec-volver" class="icono" aria-label="Volver">‹</button>
-      <strong>Récords personales</strong>
-    </div>
-    <div id="rec-filtros" class="chips-fila"></div>
-    <p id="records-vacio" class="ayuda oculto">Aún no hay marcas. Registra sesiones y aquí verás tus PRs.</p>
-    <div id="lista-records"></div>
-  </section>
-
-  <!-- Pantalla Resumen semanal: esta semana vs la anterior + tendencias -->
-  <section id="pantalla-resumen" class="pantalla oculto">
-    <div class="barra-sesion">
-      <button id="btn-res-volver" class="icono" aria-label="Volver">‹</button>
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA 1: DASHBOARD INTERACTIVO (PANEL PRINCIPAL) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <section id="pantalla-dashboard" class="pantalla">
+    <!-- Saludo y racha -->
+    <div class="dash-saludo-box">
       <div>
-        <strong>Resumen semanal</strong>
-        <span id="res-rango" class="crono-sesion"></span>
+        <div id="dash-saludo" class="dash-saludo-tit">¡Hola! 💪</div>
+        <div id="dash-fecha-hoy" class="dash-saludo-sub">Hoy es un gran día para entrenar</div>
+      </div>
+      <div id="dash-racha" class="dash-racha-chip">🔥 0 semanas</div>
+    </div>
+
+    <!-- Matriz interactiva de días de la semana -->
+    <div id="dash-dias-semana" class="dash-dias-semana"></div>
+
+    <!-- Tarjeta de acción principal (Sesión activa o rutina sugerida de hoy) -->
+    <div id="dash-hero-box" class="dash-hero"></div>
+
+    <!-- KPIs semanales interactivos -->
+    <div id="dash-kpis" class="tiles" style="margin-bottom: 14px;"></div>
+
+    <!-- Gráfica interactiva de tendencia de volumen semanal (8 semanas) -->
+    <div class="dash-seccion-tit">
+      <h3>Tendencia semanal</h3>
+      <span id="dash-tend-sub" class="ayuda" style="margin: 0; font-size: 0.78rem;">8 semanas</span>
+    </div>
+    <div id="dash-caja-chart" class="caja-chart">
+      <div id="dash-chart-vol"></div>
+    </div>
+
+    <!-- Balance muscular semanal -->
+    <div class="dash-seccion-tit">
+      <h3>Balance muscular de la semana</h3>
+    </div>
+    <div id="dash-balance-muscular" class="panel" style="padding: 12px; margin-bottom: 16px;"></div>
+
+    <!-- Tip del día con Monigote Animado -->
+    <div id="dash-tip-card" class="dash-tip-card"></div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA 2: ENTRENAR & BIBLIOTECA DE RUTINAS -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <section id="pantalla-rutinas" class="pantalla oculto">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <h2 style="font-size: 1.15rem;">Entrenar y Rutinas</h2>
+      <div style="display: flex; gap: 8px;">
+        <button id="btn-sesion-rapida" class="chip-ctrl" style="font-size: 0.8rem;">+ Libre</button>
+        <button id="btn-nueva-rutina" class="chip-ctrl on" style="font-size: 0.8rem;">+ Nueva</button>
       </div>
     </div>
-    <p id="res-vacio" class="ayuda oculto">Aún no hay sesiones esta semana ni la anterior.</p>
-    <div id="res-metricas" class="res-metricas"></div>
-    <p id="res-descubiertos" class="res-aviso oculto"></p>
-
-    <h3 id="res-h-tend" class="res-h oculto">Tendencia (8 semanas)</h3>
-    <div id="res-chips" class="chips-fila"></div>
-    <div id="res-chart" class="caja-chart"></div>
-
-    <h3 id="res-h-grupos" class="res-h oculto">Series por grupo</h3>
-    <div id="res-grupos"></div>
-
-    <h3 id="res-h-prs" class="res-h oculto">Récords de esta semana</h3>
-    <div id="res-prs"></div>
+    <p class="ayuda">Elige una rutina para empezar hoy o crea tus propias rutinas personalizadas.</p>
+    <div id="rutinas-filtros" class="chips-fila"></div>
+    <div id="lista-rutinas-gestor"></div>
+    <button id="btn-pendientes" class="secundario oculto" style="margin-top: 14px;"></button>
   </section>
 
-  <!-- Pantalla Progreso: gráficas de progresión de un ejercicio -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA 3: PESO & SEGUIMIENTO CORPORAL (BODY TRACKER) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <section id="pantalla-peso" class="pantalla oculto">
+    <div class="barra-sesion">
+      <h2 style="font-size: 1.15rem;">Seguimiento de Peso</h2>
+    </div>
+
+    <div id="peso-tiles" class="tiles compactas" style="margin-bottom: 14px;"></div>
+
+    <div class="form-peso">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 700; font-size: 0.9rem;">Añadir registro</span>
+        <input id="peso-fecha" type="date" style="background: var(--bg-suave); border: 1px solid var(--borde); color: var(--texto); border-radius: 8px; padding: 4px 8px; font-size: 0.8rem;">
+      </div>
+      <div class="fila-peso-input">
+        <input id="peso-valor" type="number" step="0.1" inputmode="decimal" placeholder="0.0" class="input-peso-grande">
+        <button id="btn-registrar-peso" class="btn-log-peso">Guardar kg</button>
+      </div>
+      <input id="peso-nota" type="text" placeholder="Nota opcional (ej: en ayunas, pos-entreno)" class="modal-input" style="margin-top: 10px; margin-bottom: 0;">
+    </div>
+
+    <div id="peso-caja-chart" class="caja-chart">
+      <div id="peso-chart"></div>
+    </div>
+
+    <h3 style="font-size: 0.95rem; margin: 16px 2px 8px;">Historial de pesajes</h3>
+    <div id="lista-pesos"></div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA 4: PROGRESO Y RÉCORDS PERSONALES (PRs) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
   <section id="pantalla-progreso" class="pantalla oculto">
-    <div class="barra-sesion">
-      <button id="btn-prog-volver" class="icono" aria-label="Volver">‹</button>
-      <strong>Progreso</strong>
+    <div class="chips-fila" style="margin-top: 0; margin-bottom: 14px;">
+      <button id="subtab-prog-ej" class="chip-btn on">Progreso por ejercicio</button>
+      <button id="subtab-prog-prs" class="chip-btn">Récords personales (PRs)</button>
     </div>
-    <div id="prog-cab" class="prog-cab">
-      <div id="prog-ilus" class="ej-ilus grande"></div>
-      <select id="prog-ejercicio" class="prog-select" aria-label="Ejercicio"></select>
+
+    <!-- Vista A: Progreso por Ejercicio -->
+    <div id="vista-prog-ejercicio">
+      <div id="prog-cab" class="prog-cab">
+        <div id="prog-ilus" class="ej-ilus grande" title="Toca para ver técnica animada"></div>
+        <select id="prog-ejercicio" class="prog-select" aria-label="Ejercicio"></select>
+      </div>
+      <p id="prog-vacio" class="ayuda oculto">Registra al menos una sesión para ver progreso.</p>
+      <div id="prog-chips" class="chips-fila"></div>
+      <div id="prog-resumen" class="prog-resumen"></div>
+      <div id="prog-chart" class="caja-chart"></div>
+      <div id="prog-tiles" class="tiles"></div>
+      <h3 id="prog-h-vol" class="res-h oculto" style="font-size: 0.95rem; margin-top: 16px;">Volumen por sesión</h3>
+      <div id="prog-chart2" class="caja-chart"></div>
+      <h3 id="prog-h-hist" class="res-h oculto" style="font-size: 0.95rem; margin-top: 16px;">Últimas sesiones, serie a serie</h3>
+      <div id="prog-tabla"></div>
     </div>
-    <p id="prog-vacio" class="ayuda oculto">Registra al menos una sesión para ver progreso.</p>
-    <div id="prog-chips" class="chips-fila"></div>
-    <div id="prog-resumen" class="prog-resumen"></div>
-    <div id="prog-chart" class="caja-chart"></div>
-    <div id="prog-tiles" class="tiles"></div>
-    <h3 id="prog-h-vol" class="res-h oculto">Volumen por sesión</h3>
-    <div id="prog-chart2" class="caja-chart"></div>
-    <h3 id="prog-h-hist" class="res-h oculto">Últimas sesiones, serie a serie</h3>
-    <div id="prog-tabla"></div>
+
+    <!-- Vista B: Salón de la Fama / Récords -->
+    <div id="vista-prog-prs" class="oculto">
+      <div id="rec-filtros" class="chips-fila"></div>
+      <p id="records-vacio" class="ayuda oculto">Aún no hay marcas registradas. ¡Completa sesiones para ganar PRs!</p>
+      <div id="lista-records"></div>
+    </div>
   </section>
 
-  <!-- Pantalla Historial: lista de sesiones guardadas -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA 5: HISTORIAL & RESUMEN SEMANAL -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
   <section id="pantalla-historial" class="pantalla oculto">
-    <div class="barra-sesion">
-      <button id="btn-hist-volver" class="icono" aria-label="Volver">‹</button>
-      <strong>Historial</strong>
+    <div class="chips-fila" style="margin-top: 0; margin-bottom: 14px;">
+      <button id="subtab-hist-sesiones" class="chip-btn on">Sesiones realizadas</button>
+      <button id="subtab-hist-resumen" class="chip-btn">Resumen semanal</button>
     </div>
-    <div id="hist-tiles" class="tiles"></div>
-    <div id="lista-historial" class="tarjetas"></div>
-    <p id="hist-vacio" class="ayuda oculto">Aún no hay sesiones guardadas.</p>
+
+    <!-- Subsección Sesiones -->
+    <div id="vista-hist-sesiones">
+      <div id="hist-tiles" class="tiles" style="margin-bottom: 14px;"></div>
+      <div id="lista-historial" class="tarjetas"></div>
+      <p id="hist-vacio" class="ayuda oculto">Aún no hay sesiones guardadas en el historial.</p>
+    </div>
+
+    <!-- Subsección Resumen Semanal -->
+    <div id="vista-hist-resumen" class="oculto">
+      <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px;">
+        <span id="res-rango" class="crono-sesion"></span>
+      </div>
+      <p id="res-vacio" class="ayuda oculto">Aún no hay suficientes datos para el resumen semanal.</p>
+      <div id="res-metricas" class="tiles" style="margin-bottom: 14px;"></div>
+      <p id="res-descubiertos" class="res-aviso oculto"></p>
+      <h3 id="res-h-tend" class="res-h oculto" style="font-size: 0.95rem;">Tendencia (8 semanas)</h3>
+      <div id="res-chips" class="chips-fila"></div>
+      <div id="res-chart" class="caja-chart"></div>
+      <h3 id="res-h-grupos" class="res-h oculto" style="font-size: 0.95rem;">Series por grupo muscular</h3>
+      <div id="res-grupos"></div>
+      <h3 id="res-h-prs" class="res-h oculto" style="font-size: 0.95rem;">Récords de esta semana</h3>
+      <div id="res-prs"></div>
+    </div>
   </section>
 
-  <!-- Pantalla Detalle: una sesión del historial (solo lectura) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA DETALLE DE SESIÓN HISTÓRICA -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
   <section id="pantalla-detalle" class="pantalla oculto">
     <div class="barra-sesion">
       <button id="btn-det-volver" class="icono" aria-label="Volver">‹</button>
@@ -112,61 +198,226 @@
         <span id="detalle-sub" class="crono-sesion"></span>
       </div>
     </div>
-    <div id="detalle-tiles" class="tiles"></div>
+    <div id="detalle-tiles" class="tiles" style="margin-bottom: 12px;"></div>
     <div id="detalle-grupos" class="barras-grupo"></div>
     <div id="detalle-cuerpo"></div>
-    <button id="btn-det-repetir" class="secundario">Repetir esta sesión</button>
-    <button id="btn-det-borrar" class="texto-peligro">Borrar del historial (no afecta el Sheet)</button>
+    <button id="btn-det-repetir" class="primario" style="margin-top: 14px;">↺ Repetir esta sesión hoy</button>
+    <button id="btn-det-borrar" class="texto-peligro">Borrar de este celular</button>
   </section>
 
-  <!-- Pantalla 2: registrar la sesión -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA ENTRENAMIENTO ACTIVO (REGISTRO EN VIVO) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
   <section id="pantalla-sesion" class="pantalla oculto">
     <div class="barra-sesion">
-      <button id="btn-volver" class="icono" aria-label="Volver">‹</button>
+      <button id="btn-volver-sesion" class="icono" aria-label="Minimizar">‹</button>
       <div>
-        <strong id="titulo-sesion"></strong>
+        <strong id="titulo-sesion">Entrenamiento</strong>
         <span id="crono-sesion" class="crono-sesion">00:00</span>
       </div>
     </div>
 
     <div id="sesion-tiles" class="tiles compactas"></div>
     <div id="sesion-barra-prog" class="barra-prog"><span></span></div>
+
     <div class="chips-fila">
-      <button id="chip-rpe" class="chip-btn" title="Registrar esfuerzo percibido (1-10) por serie">RPE</button>
-      <button id="chip-notas" class="chip-btn" title="Añadir una nota a cada ejercicio">Notas</button>
+      <button id="chip-rpe" class="chip-btn" title="Registrar RPE">RPE / RIR</button>
+      <button id="chip-notas" class="chip-btn" title="Añadir notas">Notas</button>
+      <button id="chip-peso-hoy" class="chip-btn" title="Anotar peso corporal de hoy">Mi peso hoy</button>
+    </div>
+
+    <div id="fila-peso-sesion" class="oculto" style="margin: 8px 0 12px;">
+      <input id="input-peso-sesion" type="number" step="0.1" inputmode="decimal" placeholder="Tu peso corporal hoy (kg)" class="modal-input" style="margin-bottom: 0;">
     </div>
 
     <div id="lista-ejercicios"></div>
 
     <button id="btn-agregar-ejercicio" class="secundario">+ Añadir ejercicio</button>
 
-    <div class="pie-acciones">
-      <button id="btn-guardar" class="primario">Guardar sesión</button>
-      <button id="btn-descartar" class="texto-peligro">Descartar</button>
+    <div class="pie-acciones" style="margin-top: 24px;">
+      <button id="btn-guardar" class="primario">Guardar y terminar sesión</button>
+      <button id="btn-descartar" class="texto-peligro">Descartar sesión</button>
     </div>
   </section>
 
-  <!-- Cronómetro de descanso flotante -->
-  <div id="descanso" class="descanso oculto">
-    <span id="descanso-tiempo">01:30</span>
-    <div class="descanso-btns">
-      <button id="descanso-menos">−15s</button>
-      <button id="descanso-mas">+15s</button>
-      <button id="descanso-saltar">Saltar</button>
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- PANTALLA AJUSTES & CONFIGURACIÓN -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <section id="pantalla-ajustes" class="pantalla oculto">
+    <div class="barra-sesion">
+      <button id="btn-ajustes-volver" class="icono" aria-label="Volver">‹</button>
+      <strong>Ajustes y Personalización</strong>
+    </div>
+
+    <div class="ajustes-seccion">
+      <h3>Temporizador de descanso</h3>
+      <div class="ajustes-fila">
+        <div class="ajustes-fila-txt">
+          <strong>Sonido al terminar descanso</strong>
+          <small>Beeps sintéticos agradables (Web Audio)</small>
+        </div>
+        <button id="btn-ajuste-audio" class="chip-ctrl on">Activado</button>
+      </div>
+      <div class="ajustes-fila">
+        <div class="ajustes-fila-txt">
+          <strong>Vibración háptica</strong>
+          <small>Vibrar al terminar la cuenta regresiva</small>
+        </div>
+        <button id="btn-ajuste-vibrar" class="chip-ctrl on">Activado</button>
+      </div>
+      <button id="btn-probar-audio" class="secundario" style="margin-top: 4px;">🔔 Probar sonido de descanso</button>
+    </div>
+
+    <div class="ajustes-seccion">
+      <h3>Animaciones de palitos</h3>
+      <div class="ajustes-fila">
+        <div class="ajustes-fila-txt">
+          <strong>Animaciones de ejercicio</strong>
+          <small>Monigotes vectoriales en movimiento continuo</small>
+        </div>
+        <button id="btn-ajuste-anim" class="chip-ctrl on">Activadas</button>
+      </div>
+    </div>
+
+    <div class="ajustes-seccion">
+      <h3>Sincronización con Google Sheets</h3>
+      <div class="ajustes-fila">
+        <div class="ajustes-fila-txt">
+          <strong>Backend Apps Script</strong>
+          <small id="ajustes-sync-status">Configurado</small>
+        </div>
+        <button id="btn-cambiar-clave" class="chip-ctrl">Cambiar clave</button>
+      </div>
+    </div>
+
+    <div class="ajustes-seccion">
+      <h3>Copia de Seguridad y Datos</h3>
+      <button id="btn-exportar-datos" class="secundario">📥 Exportar datos a JSON (Backup)</button>
+      <button id="btn-importar-datos" class="secundario" style="margin-top: 8px;">📤 Importar datos desde JSON</button>
+      <input id="input-archivo-importar" type="file" accept=".json" class="oculto">
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- CRONÓMETRO DE DESCANSO CIRCULAR FLOTANTE -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <div id="descanso" class="descanso-wrapper oculto">
+    <div class="descanso">
+      <div class="descanso-centro">
+        <div class="descanso-ring-caja">
+          <svg class="descanso-ring-svg" viewBox="0 0 76 76">
+            <circle class="ring-bg" cx="38" cy="38" r="33"/>
+            <circle id="descanso-ring-fg" class="ring-fg" cx="38" cy="38" r="33" stroke-dasharray="207.34" stroke-dashoffset="0"/>
+          </svg>
+          <span id="descanso-tiempo" class="descanso-tiempo">01:30</span>
+        </div>
+        <div class="descanso-info">
+          <span class="descanso-label">Tiempo de descanso</span>
+          <div id="descanso-ej-nom" class="descanso-ej">Próxima serie</div>
+        </div>
+      </div>
+      <div class="descanso-btns">
+        <button id="descanso-menos">−15s</button>
+        <button id="descanso-mas">+15s</button>
+        <button id="descanso-pausa">Pausar</button>
+        <button id="descanso-saltar" class="btn-saltar">Saltar</button>
+      </div>
     </div>
   </div>
 
-  <!-- Hoja para elegir un ejercicio del catálogo -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL DE TÉCNICA Y MONIGOTE AMPLIADO -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <div id="modal-tecnica" class="modal oculto">
+    <div class="modal-caja">
+      <div class="modal-tecnica-cab">
+        <span id="tecnica-grupo" class="chip" style="margin-bottom: 6px; display: inline-block;">Empuje</span>
+        <div id="tecnica-nombre" class="modal-tecnica-tit">Bench Press</div>
+      </div>
+
+      <div id="tecnica-ilus-box" class="ej-ilus jumbo"></div>
+
+      <div class="modal-tecnica-ctrls">
+        <button id="btn-tecnica-play" class="chip-ctrl on">⏸ Pausar</button>
+        <button id="btn-tecnica-slow" class="chip-ctrl">🐢 0.5x Lento</button>
+        <button id="btn-tecnica-prog" class="chip-ctrl">📈 Ver progreso</button>
+      </div>
+
+      <div class="tecnica-seccion">
+        <div class="tecnica-sub">Músculos involucrados</div>
+        <div id="tecnica-musculos" class="tecnica-musculos"></div>
+
+        <div class="tecnica-sub">Pautas de técnica y postura</div>
+        <ul id="tecnica-tips" class="tecnica-tips"></ul>
+      </div>
+
+      <button id="btn-tecnica-cerrar" class="secundario" style="margin-top: 16px;">Cerrar</button>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL EDITOR / CREADOR DE RUTINA -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <div id="modal-rutina-editor" class="modal oculto">
+    <div class="modal-caja">
+      <h3 id="rutina-editor-titulo" style="font-size: 1.15rem; margin-bottom: 12px;">Crear Rutina</h3>
+      <input id="rutina-editor-nombre" type="text" placeholder="Nombre de la rutina (ej: Torso Fuerza)" class="modal-input">
+      
+      <div style="display: flex; justify-content: space-between; align-items: center; margin: 6px 0 8px;">
+        <span style="font-weight: 700; font-size: 0.9rem;">Ejercicios incluidos</span>
+        <button id="btn-editor-add-ej" class="mini-accion">+ Añadir ejercicio</button>
+      </div>
+
+      <div id="rutina-editor-lista" class="selector-lista" style="max-height: 280px;"></div>
+
+      <div style="display: flex; gap: 10px; margin-top: 12px;">
+        <button id="btn-rutina-guardar" class="primario" style="flex: 1;">Guardar rutina</button>
+        <button id="btn-rutina-cerrar" class="secundario" style="flex: 0 0 90px; margin-top: 0;">Cancelar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL SELECTOR DE EJERCICIOS DEL CATÁLOGO -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
   <div id="selector" class="modal oculto">
     <div class="modal-caja">
-      <input id="selector-buscar" type="text" placeholder="Buscar ejercicio…" autocomplete="off">
+      <input id="selector-buscar" type="text" placeholder="Buscar ejercicio…" autocomplete="off" class="modal-input">
       <div id="selector-lista" class="selector-lista"></div>
       <button id="selector-cerrar" class="secundario">Cerrar</button>
     </div>
   </div>
 
+  <!-- Toast de aviso -->
   <div id="aviso" class="aviso oculto"></div>
 
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <!-- BARRA DE NAVEGACIÓN INFERIOR (TAB BAR FIJA) -->
+  <!-- ══════════════════════════════════════════════════════════════════════════ -->
+  <nav class="tabbar">
+    <button id="tab-dashboard" class="tab-btn activo">
+      <span class="tab-ico">📊</span>
+      <span>Dashboard</span>
+    </button>
+    <button id="tab-rutinas" class="tab-btn">
+      <span class="tab-ico">🏋️</span>
+      <span>Entrenar</span>
+    </button>
+    <button id="tab-peso" class="tab-btn">
+      <span class="tab-ico">⚖️</span>
+      <span>Peso</span>
+    </button>
+    <button id="tab-progreso" class="tab-btn">
+      <span class="tab-ico">📈</span>
+      <span>Progreso</span>
+    </button>
+    <button id="tab-historial" class="tab-btn">
+      <span class="tab-ico">🗂️</span>
+      <span>Historial</span>
+    </button>
+  </nav>
+
+  <!-- Scripts del sistema -->
   <script src="config.js"></script>
   <script src="catalogo.js"></script>
   <script src="ilustraciones.js"></script>

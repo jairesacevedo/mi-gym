@@ -1,49 +1,68 @@
-/* app.js — Mi Gym. Registro de sesiones + cola offline + sincronización al Sheet.
- *
- * Mapa del archivo:
- *   1. Estado y utilidades          6. Pantalla inicio
- *   2. Almacenamiento local         7. Sesión en curso (registro)
- *   3. Consultas al historial       8. Historial y detalle
- *   4. Gráficas (SVG inline)        9. Progreso · Resumen · Récords
- *   5. Navegación                  10. Guardar / sincronizar / arranque
+/* app.js — Mi Gym "Next Level".
+ * Arquitectura multi-ventana (Tab Bar), animaciones de personas de palitos,
+ * seguimiento de peso corporal, editor de rutinas personalizadas, temporizador
+ * circular con audio sintético (Web Audio API) y sincronización a Google Sheets.
  */
 (function () {
   'use strict';
 
   var CFG = window.MIGYM_CONFIG || { EXEC_URL: '', APP_SECRETO: '' };
   var CAT = window.MIGYM_CATALOGO || { sesiones: [], extras: [] };
-  var ILUS = window.MIGYM_ILUSTRACIONES || { svgDe: function () { return ''; } };
+  var ILUS = window.MIGYM_ILUSTRACIONES || {
+    svgDe: function () { return ''; },
+    infoDe: function (n) { return { nombre: n, musculos: { primarios: [] }, tips: [] }; }
+  };
 
-  var COLA_KEY = 'migym_cola_v1';        // sesiones guardadas pendientes de subir
-  var BORRADOR_KEY = 'migym_borrador_v1'; // sesión en curso (por si cierras la app)
-  var HIST_KEY = 'migym_historial_v1';   // historial local de sesiones (subidas o no)
-  var PREFS_KEY = 'migym_prefs_v1';      // preferencias (RPE, notas)
-  var HIST_MAX = 300;                    // tope de sesiones guardadas en el celular
-  var SECRETO_KEY = 'migym_secreto_v1';  // clave de sincronización, solo en este celular
+  // Claves de almacenamiento local (offline-first)
+  var COLA_KEY = 'migym_cola_v1';
+  var BORRADOR_KEY = 'migym_borrador_v1';
+  var HIST_KEY = 'migym_historial_v1';
+  var PREFS_KEY = 'migym_prefs_v2';
+  var PESOS_KEY = 'migym_pesos_v1';
+  var RUTINAS_KEY = 'migym_rutinas_custom_v1';
+  var HIST_MAX = 400;
+  var SECRETO_KEY = 'migym_secreto_v1';
 
-  // ── 1. Estado y utilidades ──────────────────────────────────────────────────
-  // sesion = { sesion_id, inicio, titulo, ejercicios:[{nombre,grupo,tipo,guia,nota,
-  //            series:[{peso,reps,altura_cm,segundos,rpe,hecha}]}] }
+  // ── 1. Estado y configuración global ───────────────────────────────────────
   var sesion = null;
   var cronoSesionInt = null;
   var descansoInt = null;
-  var prefs = { rpe: false, notas: false };
-  var piesEjercicio = [];   // [{ej, nodo}] para refrescar el pie de cada tarjeta al teclear
-  var progMetricaId = null; // métrica elegida en la pantalla de progreso
+  var descansoTotal = 90;
+  var descansoRestante = 0;
+  var descansoPausado = false;
+  var tabActual = 'entrenar';
+  var rutinaEditando = null; // para el modal de edición de rutina
+
+  var prefs = {
+    rpe: false,
+    notas: false,
+    audioDescanso: true,
+    vibrarDescanso: true,
+    animaciones: true
+  };
+
+  var piesEjercicio = [];
+  var progMetricaId = null;
   var resMetricaId = 'volumen';
   var recGrupo = 'Todos';
 
   function $(id) { return document.getElementById(id); }
-  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
-  function mostrar(id) { $(id).classList.remove('oculto'); }
-  function ocultar(id) { $(id).classList.add('oculto'); }
-  function vaciar(id) { $(id).innerHTML = ''; }
+  function el(tag, cls, txt) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (txt != null) e.textContent = txt;
+    return e;
+  }
+  function mostrar(id) { var e = $(id); if (e) e.classList.remove('oculto'); }
+  function ocultar(id) { var e = $(id); if (e) e.classList.add('oculto'); }
+  function vaciar(id) { var e = $(id); if (e) e.innerHTML = ''; }
 
   function aviso(msg, esError) {
     var a = $('aviso');
+    if (!a) return;
     a.textContent = msg;
     a.className = 'aviso' + (esError ? ' error' : '');
-    setTimeout(function () { a.classList.add('oculto'); }, 2600);
+    setTimeout(function () { a.classList.add('oculto'); }, 2800);
   }
 
   function fmtTiempo(seg) {
@@ -60,7 +79,6 @@
 
   function redondear(v) { return Math.round(v * 10) / 10; }
 
-  // Miles con punto para que 12450 kg se lea de un golpe.
   function miles(v) {
     var n = Math.round(v);
     return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -104,7 +122,6 @@
     return 'hace ' + s + (s === 1 ? ' semana' : ' semanas');
   }
 
-  // Slug del grupo para elegir su color (Tirón → tiron, Pliometría → pliometria).
   function slugGrupo(g) {
     var s = String(g == null ? '' : g).toLowerCase();
     if (s.normalize) s = s.normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -114,6 +131,7 @@
 
   function ilustracion(ej, cls) {
     var caja = el('div', 'ej-ilus' + (cls ? ' ' + cls : ''));
+    caja.title = 'Toca para ver técnica animada';
     if (ej.img) {
       var img = el('img');
       img.src = ej.img; img.alt = ''; img.loading = 'lazy';
@@ -121,15 +139,17 @@
     } else {
       caja.innerHTML = ILUS.svgDe(ej.nombre || ej.ej, ej.grupo);
     }
+    caja.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      abrirModalTecnica(ej.nombre || ej.ej, ej.grupo);
+    });
     return caja;
   }
 
-  // ── 2. Almacenamiento local ─────────────────────────────────────────────────
+  // ── 2. Almacenamiento local y preferencias ──────────────────────────────────
   function leerCola() { try { return JSON.parse(localStorage.getItem(COLA_KEY)) || []; } catch (e) { return []; } }
   function escribirCola(c) { localStorage.setItem(COLA_KEY, JSON.stringify(c)); }
 
-  // El historial se consulta muchísimo al pintar (cada tarjeta mira su propia historia),
-  // así que se parsea una vez y se guarda en memoria hasta que algo lo cambie.
   var histCache = null, ascCache = null;
   function leerHistorial() {
     if (histCache) return histCache;
@@ -143,22 +163,28 @@
   function guardarBorrador() { if (sesion) localStorage.setItem(BORRADOR_KEY, JSON.stringify(sesion)); }
 
   function leerPrefs() {
-    try { var p = JSON.parse(localStorage.getItem(PREFS_KEY)); if (p) { prefs.rpe = !!p.rpe; prefs.notas = !!p.notas; } }
-    catch (e) {}
+    try {
+      var p = JSON.parse(localStorage.getItem(PREFS_KEY));
+      if (p) {
+        prefs.rpe = !!p.rpe;
+        prefs.notas = !!p.notas;
+        if (p.audioDescanso !== undefined) prefs.audioDescanso = !!p.audioDescanso;
+        if (p.vibrarDescanso !== undefined) prefs.vibrarDescanso = !!p.vibrarDescanso;
+        if (p.animaciones !== undefined) prefs.animaciones = !!p.animaciones;
+      }
+    } catch (e) {}
   }
   function guardarPrefs() { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); }
 
-  // La clave sale de config.js si está (compatibilidad) o del almacén local del celular.
   function obtenerSecreto() { return CFG.APP_SECRETO || localStorage.getItem(SECRETO_KEY) || ''; }
   function secretoParaSubir() {
     var s = obtenerSecreto();
     if (s) return s;
-    s = (window.prompt('Clave de sincronización (te la piden una sola vez y queda guardada en este celular):') || '').trim();
+    s = (window.prompt('Clave de sincronización de Mi Gym (se guarda en este celular):') || '').trim();
     if (s) localStorage.setItem(SECRETO_KEY, s);
     return s;
   }
 
-  // Marca en el historial las sesiones que acaban de subir bien (por sesion_id).
   function marcarSubidas(cola) {
     var ids = {}; cola.forEach(function (p) { ids[p.sesion_id] = true; });
     var hist = leerHistorial();
@@ -166,9 +192,482 @@
     escribirHistorial(hist);
   }
 
-  // ── 3. Consultas al historial ───────────────────────────────────────────────
-  // El historial se guarda de más nuevo a más viejo; varias cuentas necesitan el
-  // orden cronológico (para saber cuándo una marca fue récord), así que va aparte.
+  // ── 3. Motor de Audio Sintético (Web Audio API) ─────────────────────────────
+  // Genera tonos limpios de alerta sin depender de archivos MP3 externos.
+  function reproducirAlertaDescanso() {
+    if (!prefs.audioDescanso) return;
+    try {
+      var AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      var ctx = new AudioCtx();
+
+      var notas = [
+        { f: 880, dur: 0.12, inicio: 0 },
+        { f: 880, dur: 0.12, inicio: 0.15 },
+        { f: 1174.66, dur: 0.28, inicio: 0.32 }
+      ];
+
+      notas.forEach(function (n) {
+        var osc = ctx.createOscillator();
+        var ganancia = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(n.f, ctx.currentTime + n.inicio);
+
+        ganancia.gain.setValueAtTime(0.2, ctx.currentTime + n.inicio);
+        ganancia.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + n.inicio + n.dur);
+
+        osc.connect(ganancia);
+        ganancia.connect(ctx.destination);
+
+        osc.start(ctx.currentTime + n.inicio);
+        osc.stop(ctx.currentTime + n.inicio + n.dur);
+      });
+    } catch (e) {}
+  }
+
+  function vibrar(p) {
+    if (prefs.vibrarDescanso && navigator.vibrate) {
+      try { navigator.vibrate(p); } catch (e) {}
+    }
+  }
+
+  // ── 4. Navegación Multi-Ventana (Tab Bar) ───────────────────────────────────
+  var TABS = ['dashboard', 'rutinas', 'peso', 'progreso', 'historial'];
+
+  function irATab(nombre) {
+    tabActual = nombre;
+    TABS.forEach(function (t) {
+      var btn = $('tab-' + t);
+      if (btn) btn.classList.toggle('activo', t === nombre);
+      var pant = $('pantalla-' + t);
+      if (pant) pant.classList.toggle('oculto', t !== nombre);
+    });
+
+    ocultar('pantalla-sesion');
+    ocultar('pantalla-detalle');
+    ocultar('pantalla-ajustes');
+
+    // Banner de sesión activa persistente si hay entreno en marcha
+    actualizarBannerSesionActiva();
+
+    if (nombre === 'dashboard') pintarDashboard();
+    else if (nombre === 'rutinas') pintarRutinasGestor();
+    else if (nombre === 'peso') pintarModuloPeso();
+    else if (nombre === 'progreso') abrirProgreso();
+    else if (nombre === 'historial') abrirHistorial();
+
+    try { window.scrollTo(0, 0); } catch (e) {}
+  }
+
+  function actualizarBannerSesionActiva() {
+    var banner = $('banner-sesion-activa');
+    if (!banner) return;
+    if (sesion && tabActual !== 'sesion') {
+      $('banner-activa-tit').textContent = sesion.titulo || 'Entrenamiento en curso';
+      var hechas = 0, total = 0;
+      sesion.ejercicios.forEach(function (e) {
+        e.series.forEach(function (s) { total++; if (s.hecha) hechas++; });
+      });
+      var transcurrido = fmtTiempo((Date.now() - sesion.inicio) / 1000);
+      $('banner-activa-sub').textContent = transcurrido + ' · ' + hechas + '/' + total + ' series';
+      mostrar('banner-sesion-activa');
+    } else {
+      ocultar('banner-sesion-activa');
+    }
+  }
+
+  // ── 5. Módulo de Seguimiento de Peso Corporal ───────────────────────────────
+  function leerPesos() {
+    try { return JSON.parse(localStorage.getItem(PESOS_KEY)) || []; }
+    catch (e) { return []; }
+  }
+
+  function guardarPesos(arr) {
+    localStorage.setItem(PESOS_KEY, JSON.stringify(arr));
+  }
+
+  function registrarPeso(val, fecha, nota) {
+    val = num(val);
+    if (!val || val <= 0) { aviso('Ingresa un peso válido (ej: 75.4)', true); return; }
+    fecha = fecha || new Date().toISOString().slice(0, 10);
+
+    var lista = leerPesos();
+    lista.unshift({
+      id: 'peso_' + Date.now(),
+      fecha: fecha,
+      valor: redondear(val),
+      nota: String(nota || '').trim()
+    });
+    // Ordenar de más reciente a más antiguo
+    lista.sort(function (a, b) { return new Date(b.fecha) - new Date(a.fecha); });
+    guardarPesos(lista);
+    aviso('Peso registrado: ' + redondear(val) + ' kg');
+    pintarModuloPeso();
+  }
+
+  function borrarPeso(id) {
+    if (!confirm('¿Eliminar este registro de peso?')) return;
+    var lista = leerPesos().filter(function (p) { return p.id !== id; });
+    guardarPesos(lista);
+    pintarModuloPeso();
+  }
+
+  function pintarModuloPeso() {
+    var lista = leerPesos();
+    var tiles = $('peso-tiles');
+    tiles.innerHTML = '';
+
+    var inputFecha = $('peso-fecha');
+    if (inputFecha && !inputFecha.value) inputFecha.value = new Date().toISOString().slice(0, 10);
+
+    if (lista.length) {
+      var actual = lista[0].valor;
+      var vals = lista.map(function (p) { return p.valor; });
+      var min = Math.min.apply(null, vals);
+      var max = Math.max.apply(null, vals);
+
+      // Variación en 7 días
+      var hace7 = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+      var registro7 = null;
+      for (var i = 0; i < lista.length; i++) {
+        if (lista[i].fecha <= hace7) { registro7 = lista[i]; break; }
+      }
+      var delta7 = registro7 ? redondear(actual - registro7.valor) : null;
+      var d7Txt = delta7 != null ? (delta7 > 0 ? '+' + delta7 : String(delta7)) + ' kg' : '—';
+
+      tiles.appendChild(tile('Actual', actual + ' kg', fmtFechaCorta(lista[0].fecha)));
+      tiles.appendChild(tile('Δ 7 días', d7Txt, registro7 ? 'vs ' + registro7.valor + ' kg' : 'primeros datos'));
+      tiles.appendChild(tile('Mínimo', min + ' kg', 'histórico'));
+      tiles.appendChild(tile('Máximo', max + ' kg', 'histórico'));
+    } else {
+      tiles.appendChild(tile('Peso', '—', 'Sin registros'));
+      tiles.appendChild(tile('Meta', 'Registra', 'tu primer peso'));
+    }
+
+    // Gráfica de peso interactiva
+    var chartCont = $('peso-chart');
+    if (lista.length >= 2) {
+      mostrar('peso-caja-chart');
+      var pts = lista.slice(0, 30).reverse().map(function (p) {
+        return { fecha: p.fecha, valor: p.valor };
+      });
+      pintarChart(chartCont, svgLinea(pts, 'kg'), 'Evolución de peso · toca un punto');
+    } else {
+      ocultar('peso-caja-chart');
+    }
+
+    // Lista histórica
+    var contLista = $('lista-pesos');
+    contLista.innerHTML = '';
+    if (!lista.length) {
+      contLista.innerHTML = '<p class="ayuda">Aún no has registrado pesajes. Empieza anotando tu peso de hoy.</p>';
+      return;
+    }
+
+    lista.forEach(function (p, idx) {
+      var item = el('div', 'item-peso');
+      var izq = el('div');
+      izq.appendChild(el('span', 'item-peso-val', p.valor + ' kg'));
+      var sub = fmtFechaCorta(p.fecha) + (p.nota ? ' · “' + p.nota + '”' : '');
+      izq.appendChild(el('div', 'item-peso-fecha', sub));
+      item.appendChild(izq);
+
+      var der = el('div', 'barra-lado');
+      if (idx < lista.length - 1) {
+        var dif = redondear(p.valor - lista[idx + 1].valor);
+        var clsDif = dif > 0 ? 'sube' : dif < 0 ? 'baja' : 'igual';
+        var txtDif = (dif > 0 ? '+' : '') + dif + ' kg';
+        der.appendChild(el('span', 'item-peso-dif ' + clsDif, txtDif));
+      }
+      var btnDel = el('button', 'quitar-serie', '✕');
+      btnDel.title = 'Eliminar registro';
+      btnDel.addEventListener('click', function () { borrarPeso(p.id); });
+      der.appendChild(btnDel);
+
+      item.appendChild(der);
+      contLista.appendChild(item);
+    });
+  }
+
+  // ── 6. Gestor y Editor de Rutinas Personalizadas ───────────────────────────
+  function leerRutinasCustom() {
+    try { return JSON.parse(localStorage.getItem(RUTINAS_KEY)) || []; }
+    catch (e) { return []; }
+  }
+
+  function guardarRutinasCustom(arr) {
+    localStorage.setItem(RUTINAS_KEY, JSON.stringify(arr));
+  }
+
+  function todasLasRutinas() {
+    var fijas = CAT.sesiones || [];
+    var custom = leerRutinasCustom();
+    return fijas.concat(custom);
+  }
+
+  function pintarRutinasGestor() {
+    var lista = todasLasRutinas();
+    var cont = $('lista-rutinas-gestor');
+    cont.innerHTML = '';
+
+    lista.forEach(function (r, rIdx) {
+      var card = el('div', 'rutina-card');
+      var cab = el('div', 'rutina-cab');
+      var tit = el('span', 'rutina-tit', r.nombre);
+      cab.appendChild(tit);
+      if (r.esCustom) cab.appendChild(el('span', 'chip nuevo', 'Personalizada'));
+      card.appendChild(cab);
+
+      var nEj = r.ejercicios ? r.ejercicios.length : 0;
+      var resumen = nEj > 0
+        ? nEj + ' ejercicios: ' + r.ejercicios.map(function (e) { return e.nombre; }).slice(0, 3).join(', ') + (nEj > 3 ? '…' : '')
+        : 'Rutina libre (selección manual)';
+      card.appendChild(el('small', 'ayuda', resumen));
+
+      if (nEj > 0) {
+        var tira = el('div', 'tira-ilus');
+        r.ejercicios.slice(0, 6).forEach(function (e) { tira.appendChild(ilustracion(e, 'mini')); });
+        card.appendChild(tira);
+      }
+
+      var acciones = el('div', 'rutina-acciones');
+      var btnIniciar = el('button', 'primario', 'Iniciar entreno');
+      btnIniciar.addEventListener('click', function () { iniciarSesion(r); });
+      acciones.appendChild(btnIniciar);
+
+      var btnEditar = el('button', 'secundario', r.esCustom ? 'Editar' : 'Duplicar');
+      btnEditar.addEventListener('click', function () {
+        if (r.esCustom) abrirEditorRutina(r);
+        else clonarYEditarRutina(r);
+      });
+      acciones.appendChild(btnEditar);
+
+      if (r.esCustom) {
+        var btnBorrar = el('button', 'quitar-serie', '🗑️');
+        btnBorrar.title = 'Eliminar rutina';
+        btnBorrar.style.width = '38px'; btnBorrar.style.height = '38px';
+        btnBorrar.addEventListener('click', function () { eliminarRutinaCustom(r.id); });
+        acciones.appendChild(btnBorrar);
+      }
+
+      card.appendChild(acciones);
+      cont.appendChild(card);
+    });
+  }
+
+  function clonarYEditarRutina(r) {
+    var nueva = {
+      id: 'rutina_' + Date.now(),
+      nombre: r.nombre + ' (Copia)',
+      esCustom: true,
+      ejercicios: (r.ejercicios || []).map(function (e) {
+        return {
+          nombre: e.nombre, grupo: e.grupo, tipo: e.tipo || 'peso_reps',
+          series: e.series || 3, reps: e.reps || '8-10', descanso: e.descanso || 90
+        };
+      })
+    };
+    abrirEditorRutina(nueva);
+  }
+
+  function eliminarRutinaCustom(id) {
+    if (!confirm('¿Eliminar esta rutina personalizada?')) return;
+    var list = leerRutinasCustom().filter(function (r) { return r.id !== id; });
+    guardarRutinasCustom(list);
+    pintarRutinasGestor();
+    pintarDashboard();
+  }
+
+  function abrirEditorRutina(r) {
+    rutinaEditando = JSON.parse(JSON.stringify(r || {
+      id: 'rutina_' + Date.now(),
+      nombre: 'Nueva rutina',
+      esCustom: true,
+      ejercicios: []
+    }));
+
+    $('rutina-editor-titulo').textContent = r ? 'Editar Rutina' : 'Crear Rutina';
+    $('rutina-editor-nombre').value = rutinaEditando.nombre;
+    pintarEjerciciosEditorRutina();
+    mostrar('modal-rutina-editor');
+  }
+
+  function pintarEjerciciosEditorRutina() {
+    var cont = $('rutina-editor-lista');
+    cont.innerHTML = '';
+    if (!rutinaEditando.ejercicios.length) {
+      cont.innerHTML = '<p class="ayuda" style="text-align:center; padding: 20px 0;">Aún no has agregado ejercicios. Pulsa "+ Añadir ejercicio".</p>';
+      return;
+    }
+
+    rutinaEditando.ejercicios.forEach(function (e, idx) {
+      var fila = el('div', 'editor-ej-fila');
+      fila.appendChild(ilustracion(e, 'mini'));
+
+      var info = el('div', 'editor-ej-info');
+      info.appendChild(el('div', 'editor-ej-nom', e.nombre));
+      var sub = (e.series || 3) + ' series × ' + (e.reps || '8-10') + ' · descanso ' + (e.descanso || 90) + 's';
+      info.appendChild(el('div', 'editor-ej-sub', sub));
+      fila.appendChild(info);
+
+      var btns = el('div', 'editor-ej-btns');
+      if (idx > 0) {
+        var up = el('button', 'btn-orden', '▲');
+        up.addEventListener('click', function () {
+          var tmp = rutinaEditando.ejercicios[idx - 1];
+          rutinaEditando.ejercicios[idx - 1] = e;
+          rutinaEditando.ejercicios[idx] = tmp;
+          pintarEjerciciosEditorRutina();
+        });
+        btns.appendChild(up);
+      }
+      if (idx < rutinaEditando.ejercicios.length - 1) {
+        var down = el('button', 'btn-orden', '▼');
+        down.addEventListener('click', function () {
+          var tmp = rutinaEditando.ejercicios[idx + 1];
+          rutinaEditando.ejercicios[idx + 1] = e;
+          rutinaEditando.ejercicios[idx] = tmp;
+          pintarEjerciciosEditorRutina();
+        });
+        btns.appendChild(down);
+      }
+      var del = el('button', 'quitar-ej', '✕');
+      del.addEventListener('click', function () {
+        rutinaEditando.ejercicios.splice(idx, 1);
+        pintarEjerciciosEditorRutina();
+      });
+      btns.appendChild(del);
+
+      fila.appendChild(btns);
+      cont.appendChild(fila);
+    });
+  }
+
+  function guardarRutinaDesdeEditor() {
+    var nom = $('rutina-editor-nombre').value.trim();
+    if (!nom) { aviso('Escribe un nombre para la rutina', true); return; }
+    rutinaEditando.nombre = nom;
+    rutinaEditando.esCustom = true;
+
+    var lista = leerRutinasCustom();
+    var idx = -1;
+    for (var i = 0; i < lista.length; i++) {
+      if (lista[i].id === rutinaEditando.id) { idx = i; break; }
+    }
+    if (idx >= 0) lista[idx] = rutinaEditando;
+    else lista.push(rutinaEditando);
+
+    guardarRutinasCustom(lista);
+    ocultar('modal-rutina-editor');
+    aviso('Rutina guardada: ' + nom);
+    pintarRutinasGestor();
+    pintarDashboard();
+  }
+
+  // ── 7. Modal de Técnica y Monigote Animado ──────────────────────────────────
+  function abrirModalTecnica(nombre, grupo) {
+    var info = ILUS.infoDe(nombre, grupo);
+    $('tecnica-nombre').textContent = info.nombre;
+    $('tecnica-grupo').textContent = info.grupo;
+    $('tecnica-grupo').className = 'chip g-' + slugGrupo(info.grupo);
+
+    var box = $('tecnica-ilus-box');
+    box.innerHTML = ILUS.svgDe(info.nombre, info.grupo, 'jumbo');
+
+    // Botones de control
+    var btnPlay = $('btn-tecnica-play');
+    var btnSlow = $('btn-tecnica-slow');
+    btnPlay.classList.add('on'); btnPlay.textContent = '⏸ Pausar';
+    btnSlow.classList.remove('on');
+
+    btnPlay.onclick = function () {
+      var svgEl = box.querySelector('svg');
+      if (!svgEl) return;
+      var pausado = svgEl.classList.toggle('pausado');
+      btnPlay.classList.toggle('on', !pausado);
+      btnPlay.textContent = pausado ? '▶ Reanudar' : '⏸ Pausar';
+    };
+
+    btnSlow.onclick = function () {
+      var svgEl = box.querySelector('svg');
+      if (!svgEl) return;
+      var lento = svgEl.classList.toggle('lento');
+      btnSlow.classList.toggle('on', lento);
+    };
+
+    $('btn-tecnica-prog').onclick = function () {
+      ocultar('modal-tecnica');
+      irATab('progreso');
+      abrirProgreso(info.nombre);
+    };
+
+    // Músculos trabajados
+    var musCont = $('tecnica-musculos');
+    musCont.innerHTML = '';
+    (info.musculos.primarios || []).forEach(function (m) {
+      musCont.appendChild(el('span', 'chip-musculo', m));
+    });
+    (info.musculos.secundarios || []).forEach(function (m) {
+      musCont.appendChild(el('span', 'chip-musculo sec', m));
+    });
+
+    // Pautas técnicas
+    var tipsCont = $('tecnica-tips');
+    tipsCont.innerHTML = '';
+    (info.tips || []).forEach(function (t) {
+      tipsCont.appendChild(el('li', null, t));
+    });
+
+    mostrar('modal-tecnica');
+  }
+
+  // ── 8. Temporizador de Descanso Circular Flotante ───────────────────────────
+  function iniciarDescanso(seg, nombreEj) {
+    descansoTotal = seg || 90;
+    descansoRestante = descansoTotal;
+    descansoPausado = false;
+    $('descanso-pausa').textContent = 'Pausar';
+    $('descanso-ej-nom').textContent = nombreEj ? 'Siguiente: ' + nombreEj : 'Tiempo de descanso';
+
+    mostrar('descanso');
+    actualizarDescansoUI();
+
+    clearInterval(descansoInt);
+    descansoInt = setInterval(function () {
+      if (!descansoPausado) {
+        descansoRestante--;
+        actualizarDescansoUI();
+        if (descansoRestante <= 0) finDescanso();
+      }
+    }, 1000);
+  }
+
+  function actualizarDescansoUI() {
+    $('descanso-tiempo').textContent = fmtTiempo(descansoRestante);
+    var ring = $('descanso-ring-fg');
+    if (ring) {
+      var totalCirc = 207.34;
+      var frac = Math.max(0, descansoRestante / (descansoTotal || 1));
+      var offset = totalCirc * (1 - frac);
+      ring.style.strokeDashoffset = offset;
+      if (descansoRestante <= 10) ring.style.stroke = 'var(--oro)';
+      else ring.style.stroke = 'var(--aqua-brillante)';
+    }
+  }
+
+  function finDescanso() {
+    clearInterval(descansoInt);
+    var d = $('descanso');
+    d.classList.add('suena');
+    reproducirAlertaDescanso();
+    vibrar([250, 100, 250]);
+    setTimeout(function () {
+      d.classList.remove('suena');
+      ocultar('descanso');
+    }, 2200);
+  }
+
+  // ── 9. Consultas al Historial y Estadísticas ────────────────────────────────
   function historialAsc() {
     if (ascCache) return ascCache;
     ascCache = leerHistorial().slice().sort(function (a, b) {
@@ -207,8 +706,6 @@
     return partes.join(' · ');
   }
 
-  // Resume un ejercicio a lo largo de todo el historial: última vez (con TODAS sus
-  // series, no solo la tope), mejores marcas de siempre y acumulados.
   function statsEjercicio(nombre) {
     var st = {
       nombre: nombre, tipo: null, grupo: '', ultima: null, ultimaSets: null, ultimaFecha: null,
@@ -253,7 +750,6 @@
     });
   }
 
-  // La sesión más reciente en la que hiciste ese ejercicio, con todas sus series.
   function sesionPreviaDe(nombre, excluirId) {
     var hist = leerHistorial();
     for (var i = 0; i < hist.length; i++) {
@@ -285,9 +781,8 @@
     return null;
   }
 
-  // Lunes 00:00 local de la semana que contiene d.
   function inicioSemana(d) {
-    var x = new Date(d); var lun = (x.getDay() + 6) % 7; // 0 = lunes
+    var x = new Date(d); var lun = (x.getDay() + 6) % 7;
     x.setHours(0, 0, 0, 0); x.setDate(x.getDate() - lun); return x;
   }
 
@@ -310,7 +805,6 @@
     return agg;
   }
 
-  // Las últimas n semanas (la actual al final), ya agregadas.
   function ultimasSemanas(n) {
     var out = [], ini = inicioSemana(new Date());
     for (var i = n - 1; i >= 0; i--) {
@@ -321,7 +815,6 @@
     return out;
   }
 
-  // Semanas seguidas entrenando (cuenta hacia atrás; la semana en curso solo suma si ya entrenaste).
   function rachaSemanas() {
     var ini = inicioSemana(new Date()), racha = 0, i = 0;
     for (;;) {
@@ -329,16 +822,14 @@
       var hasta = new Date(desde.getTime() + 7 * 864e5);
       var n = agregarSemana(desde, hasta).nSesiones;
       if (n > 0) racha++;
-      else if (i > 0) break;       // una semana vacía corta la racha…
-      else if (i === 0) { i++; continue; } // …salvo la actual, que quizá aún no empiezas
+      else if (i > 0) break;
+      else if (i === 0) { i++; continue; }
       i++;
       if (i > 104) break;
     }
     return racha;
   }
 
-  // Récords conseguidos dentro de un rango: recorre el historial en orden y marca
-  // cada vez que una serie superó lo mejor que había hasta ese momento.
   function prsEnRango(desde, hasta) {
     var mejor = {}, out = [];
     historialAsc().forEach(function (h) {
@@ -358,7 +849,7 @@
           if (p > 0 && r > 0) { var e = p * (1 + r / 30); if (e > m.e1rm) m.e1rm = e; }
         });
         m.visto = true;
-        if (!antes.visto) return;             // la primera vez que lo haces no es récord
+        if (!antes.visto) return;
         if (f < desde || f >= hasta) return;
         var txt = null;
         if (tipo === 'peso_reps') {
@@ -376,7 +867,6 @@
     return out;
   }
 
-  // Métricas disponibles según el tipo de ejercicio (la primera es la de por defecto).
   function metricasDe(tipo) {
     function maxDe(sets, campo) {
       return sets.reduce(function (m, s) { return Math.max(m, num(s[campo]) || 0); }, 0);
@@ -400,7 +890,7 @@
       { id: 'repstot', etq: 'Reps total', unidad: 'reps', calc: function (ss) { return sumDe(ss, 'reps'); } },
       { id: 'series', etq: 'Series', unidad: '', calc: function (ss) { return ss.length; } },
     ];
-    return [ // peso_reps
+    return [
       { id: 'e1rm', etq: 'e1RM', unidad: 'kg', calc: function (ss) {
         return redondear(ss.reduce(function (m, s) {
           var p = num(s.peso) || 0, r = num(s.reps) || 0;
@@ -413,7 +903,6 @@
     ];
   }
 
-  // Una marca por sesión para el ejercicio y la métrica elegidos.
   function serieDeMetrica(nombre, metrica) {
     var pts = [];
     historialAsc().forEach(function (h) {
@@ -424,9 +913,7 @@
     return pts;
   }
 
-  // ── 4. Gráficas (SVG inline, sin librerías; los colores salen del CSS) ───────
-  // Convenciones: trazos finos, rejilla discreta, etiquetas directas solo en los
-  // puntos que importan (último y mejor) y tabla de apoyo debajo de cada gráfica.
+  // ── 10. Gráficas SVG Inline ────────────────────────────────────────────────
   function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 
   function fmtVal(v, unidad) {
@@ -448,121 +935,110 @@
     var rejilla = '', niveles = [max, (max + min) / 2, min];
     niveles.forEach(function (v, k) {
       if (k === 1 && max === min) return;
-      var y = Y(v).toFixed(1);
-      rejilla += '<line class="grid" x1="' + pl + '" y1="' + y + '" x2="' + (W - pr) + '" y2="' + y + '"/>'
-        + '<text class="lbl" x="' + (pl - 6) + '" y="' + (+y + 3.5).toFixed(1) + '" text-anchor="end">' + esc(redondear(v)) + '</text>';
+      var y = Math.round(Y(v));
+      rejilla += '<line class="grid" x1="' + pl + '" y1="' + y + '" x2="' + (W - pr) + '" y2="' + y + '"/>' +
+        '<text class="lbl" x="' + (pl - 6) + '" y="' + (y + 3) + '" text-anchor="end">' + esc(fmtVal(v, '')) + '</text>';
     });
 
-    var d = pts.map(function (p, i) { return (i ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(p.valor).toFixed(1); }).join(' ');
-    var area = pts.length > 1
-      ? '<path class="area" d="' + d + ' L' + X(pts.length - 1).toFixed(1) + ' ' + (pt + ih) + ' L' + X(0).toFixed(1) + ' ' + (pt + ih) + ' Z"/>'
-      : '';
+    var dLinea = '', dArea = '';
+    pts.forEach(function (p, i) {
+      var x = Math.round(X(i)), y = Math.round(Y(p.valor));
+      dLinea += (i === 0 ? 'M' : 'L') + x + ' ' + y;
+      dArea += (i === 0 ? 'M' + x + ' ' + Math.round(Y(lo)) + 'L' + x + ' ' + y : 'L' + x + ' ' + y);
+    });
+    if (pts.length) dArea += 'L' + Math.round(X(pts.length - 1)) + ' ' + Math.round(Y(lo)) + 'Z';
 
-    var iMax = 0;
-    pts.forEach(function (p, i) { if (p.valor > pts[iMax].valor) iMax = i; });
-    var puntos = pts.map(function (p, i) {
-      var ult = i === pts.length - 1;
-      return '<circle class="pt' + (ult ? ' ult' : '') + '" cx="' + X(i).toFixed(1) + '" cy="' + Y(p.valor).toFixed(1) + '" r="' + (ult ? 5 : 4) + '"'
-        + ' data-detalle="' + esc(fmtFechaCorta(p.fecha) + ' · ' + fmtVal(p.valor, unidad)) + '">'
-        + '<title>' + esc(fmtFechaCorta(p.fecha) + ': ' + fmtVal(p.valor, unidad)) + '</title></circle>';
-    }).join('');
+    var puntos = '';
+    pts.forEach(function (p, i) {
+      var x = Math.round(X(i)), y = Math.round(Y(p.valor));
+      var esUlt = i === pts.length - 1;
+      var esMax = p.valor === max;
+      puntos += '<circle class="pt' + (esUlt ? ' ult' : '') + '" cx="' + x + '" cy="' + y + '" r="' + (esUlt ? 4.5 : 3.5) + '"' +
+        ' data-detalle="' + esc(fmtDiaMes(p.fecha) + ': ' + fmtVal(p.valor, unidad)) + '"/>';
+      if (esUlt || esMax) {
+        puntos += '<text class="val' + (esUlt ? '' : ' tenue') + '" x="' + x + '" y="' + (y - 7) + '" text-anchor="middle">' +
+          esc(fmtVal(p.valor, '')) + '</text>';
+      }
+    });
 
-    // Etiquetas directas: solo el último punto y, si es otro, el mejor.
-    var etiquetas = '<text class="val" x="' + X(pts.length - 1).toFixed(1) + '" y="' + (Y(pts[pts.length - 1].valor) - 10).toFixed(1) + '" text-anchor="end">'
-      + esc(fmtVal(pts[pts.length - 1].valor, unidad)) + '</text>';
-    if (iMax !== pts.length - 1) {
-      etiquetas += '<text class="val tenue" x="' + X(iMax).toFixed(1) + '" y="' + (Y(pts[iMax].valor) - 10).toFixed(1) + '" text-anchor="middle">'
-        + esc(fmtVal(pts[iMax].valor, '')) + '</text>';
+    var fechas = '';
+    if (pts.length) {
+      fechas += '<text class="lbl" x="' + Math.round(X(0)) + '" y="' + (H - 6) + '" text-anchor="start">' + esc(fmtDiaMes(pts[0].fecha)) + '</text>';
+      if (pts.length > 1) {
+        fechas += '<text class="lbl" x="' + Math.round(X(pts.length - 1)) + '" y="' + (H - 6) + '" text-anchor="end">' +
+          esc(fmtDiaMes(pts[pts.length - 1].fecha)) + '</text>';
+      }
     }
 
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Progresión en ' + esc(unidad || 'la métrica elegida') + '">'
-      + rejilla + area + (pts.length > 1 ? '<path class="linea" d="' + d + '"/>' : '') + puntos + etiquetas
-      + '<text class="lbl" x="' + pl + '" y="' + (H - 7) + '" text-anchor="start">' + esc(fmtDiaMes(pts[0].fecha)) + '</text>'
-      + '<text class="lbl" x="' + (W - pr) + '" y="' + (H - 7) + '" text-anchor="end">' + esc(fmtDiaMes(pts[pts.length - 1].fecha)) + '</text>'
-      + '</svg>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' + rejilla +
+      (dArea ? '<path class="area" d="' + dArea + '"/>' : '') +
+      (dLinea ? '<path class="linea" d="' + dLinea + '"/>' : '') +
+      puntos + fechas + '</svg>';
   }
 
-  // items: [{etq, valor, destacado}]
   function svgBarras(items, unidad) {
-    var W = 320, H = 156, pl = 40, pr = 10, pt = 22, pb = 26;
-    var max = items.reduce(function (m, i) { return Math.max(m, i.valor); }, 0) || 1;
+    var W = 320, H = 140, pl = 16, pr = 16, pt = 16, pb = 22;
+    var vals = items.map(function (it) { return it.valor; });
+    var max = Math.max.apply(null, vals.concat([1]));
+    var n = items.length || 1;
     var iw = W - pl - pr, ih = H - pt - pb;
-    var paso = iw / items.length;
-    var bw = Math.max(8, Math.min(30, paso - 6)); // el hueco deja respirar las barras
-    var base = pt + ih;
+    var rancho = iw / n;
+    var anchoBarra = Math.max(8, rancho * 0.58);
 
-    var rejilla = '';
-    [max, max / 2].forEach(function (v) {
-      var y = (base - ih * (v / max)).toFixed(1);
-      rejilla += '<line class="grid" x1="' + pl + '" y1="' + y + '" x2="' + (W - pr) + '" y2="' + y + '"/>'
-        + '<text class="lbl" x="' + (pl - 6) + '" y="' + (+y + 3.5).toFixed(1) + '" text-anchor="end">' + esc(max >= 1000 ? Math.round(v / 100) / 10 + 'k' : redondear(v)) + '</text>';
-    });
-
-    var barras = items.map(function (it, i) {
-      var h = it.valor > 0 ? Math.max(2, ih * (it.valor / max)) : 0;
-      var x = pl + paso * i + (paso - bw) / 2, y = base - h;
-      var r = Math.min(4, bw / 2, h);
-      var d = h > 0
-        ? 'M' + x.toFixed(1) + ' ' + base + ' L' + x.toFixed(1) + ' ' + (y + r).toFixed(1)
-          + ' Q' + x.toFixed(1) + ' ' + y.toFixed(1) + ' ' + (x + r).toFixed(1) + ' ' + y.toFixed(1)
-          + ' L' + (x + bw - r).toFixed(1) + ' ' + y.toFixed(1)
-          + ' Q' + (x + bw).toFixed(1) + ' ' + y.toFixed(1) + ' ' + (x + bw).toFixed(1) + ' ' + (y + r).toFixed(1)
-          + ' L' + (x + bw).toFixed(1) + ' ' + base + ' Z'
-        : '';
-      var vacio = h === 0 ? '<line class="cero" x1="' + x.toFixed(1) + '" y1="' + base + '" x2="' + (x + bw).toFixed(1) + '" y2="' + base + '"/>' : '';
-      return '<g data-detalle="' + esc(it.etq + ' · ' + fmtVal(it.valor, unidad)) + '">'
-        + '<rect class="zona" x="' + (pl + paso * i).toFixed(1) + '" y="' + pt + '" width="' + paso.toFixed(1) + '" height="' + ih + '"/>'
-        + (d ? '<path class="barra' + (it.destacado ? ' act' : '') + '" d="' + d + '"/>' : vacio)
-        + '<title>' + esc(it.etq + ': ' + fmtVal(it.valor, unidad)) + '</title></g>';
-    }).join('');
-
-    // Etiqueta directa solo en la barra destacada (normalmente la semana en curso).
-    var etiqueta = '';
+    var barras = '', etiquetas = '';
     items.forEach(function (it, i) {
-      if (!it.destacado || !it.valor) return;
-      var h = Math.max(2, ih * (it.valor / max));
-      etiqueta = '<text class="val" x="' + (pl + paso * i + paso / 2).toFixed(1) + '" y="' + (base - h - 8).toFixed(1) + '" text-anchor="middle">'
-        + esc(fmtVal(it.valor, '')) + '</text>';
+      var h = max ? (it.valor / max) * ih : 0;
+      var x = pl + rancho * i + (rancho - anchoBarra) / 2;
+      var y = pt + (ih - h);
+      var cx = pl + rancho * i + rancho / 2;
+      barras += '<rect class="barra' + (it.destacado ? ' act' : '') + '" x="' + Math.round(x) + '" y="' + Math.round(y) +
+        '" width="' + Math.round(anchoBarra) + '" height="' + Math.max(2, Math.round(h)) + '"' +
+        ' data-detalle="' + esc(it.etq + ': ' + fmtVal(it.valor, unidad)) + '"/>';
+      etiquetas += '<text class="lbl" x="' + Math.round(cx) + '" y="' + (H - 6) + '" text-anchor="middle">' + esc(it.etq) + '</text>';
+      if (it.valor > 0 && it.destacado) {
+        barras += '<text class="val" x="' + Math.round(cx) + '" y="' + Math.round(y - 4) + '" text-anchor="middle">' + esc(fmtVal(it.valor, '')) + '</text>';
+      }
     });
 
-    // Con muchas barras se etiqueta una sí y una no, contando desde la última.
-    var ejeX = items.map(function (it, i) {
-      if (items.length > 5 && (items.length - 1 - i) % 2 !== 0) return '';
-      return '<text class="lbl" x="' + (pl + paso * i + paso / 2).toFixed(1) + '" y="' + (H - 7) + '" text-anchor="middle">' + esc(it.etq) + '</text>';
-    }).join('');
-
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Comparativa por periodo">'
-      + rejilla + barras + etiqueta + ejeX + '</svg>';
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' +
+      '<line class="cero" x1="' + pl + '" y1="' + (pt + ih) + '" x2="' + (W - pr) + '" y2="' + (pt + ih) + '"/>' +
+      barras + etiquetas + '</svg>';
   }
 
-  // Mini barras para el panel de inicio (sin ejes; el dato exacto va en el pie).
   function svgSpark(items) {
-    var W = 300, H = 46, max = items.reduce(function (m, i) { return Math.max(m, i.valor); }, 0) || 1;
-    var paso = W / items.length, bw = Math.max(6, paso - 5);
-    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Volumen de las últimas semanas">'
-      + items.map(function (it, i) {
-        var h = it.valor > 0 ? Math.max(2, (H - 4) * (it.valor / max)) : 1.5;
-        var x = paso * i + (paso - bw) / 2;
-        return '<rect class="barra' + (it.destacado ? ' act' : '') + '" x="' + x.toFixed(1) + '" y="' + (H - h).toFixed(1)
-          + '" width="' + bw.toFixed(1) + '" height="' + h.toFixed(1) + '" rx="2"><title>' + esc(it.etq + ': ' + miles(it.valor) + ' kg') + '</title></rect>';
-      }).join('') + '</svg>';
+    var W = 280, H = 46, max = Math.max.apply(null, items.map(function (it) { return it.valor; }).concat([1]));
+    var n = items.length || 1, rancho = W / n, bw = Math.max(5, rancho * 0.55);
+    var barras = '';
+    items.forEach(function (it, i) {
+      var h = max ? (it.valor / max) * (H - 4) : 0;
+      var x = rancho * i + (rancho - bw) / 2;
+      barras += '<rect class="barra' + (it.destacado ? ' act' : '') + '" x="' + Math.round(x) + '" y="' + Math.round(H - h) +
+        '" width="' + Math.round(bw) + '" height="' + Math.max(2, Math.round(h)) + '"/>';
+    });
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">' + barras + '</svg>';
   }
 
-  // Inserta una gráfica y deja que al tocarla se lea el valor exacto abajo.
   function pintarChart(cont, svgStr, pieDefecto) {
-    if (cont._migym) cont.removeEventListener('click', cont._migym); // no apilar oyentes al repintar
+    if (!cont) return;
+    if (cont._migym) cont.removeEventListener('click', cont._migym);
     cont.innerHTML = svgStr + '<small class="chart-pie">' + esc(pieDefecto || '') + '</small>';
     var pie = cont.querySelector('.chart-pie');
     cont._migym = function (ev) {
       var n = ev.target;
       while (n && n !== cont && !(n.getAttribute && n.getAttribute('data-detalle'))) n = n.parentNode;
-      if (n && n !== cont) pie.textContent = n.getAttribute('data-detalle');
+      if (n && n !== cont && pie) pie.textContent = n.getAttribute('data-detalle');
     };
     cont.addEventListener('click', cont._migym);
   }
 
-  // Barra horizontal comparando esta semana con la anterior, con el nombre siempre
-  // visible: el color identifica el grupo, nunca lo sustituye.
+  function tile(label, valor, extra, cls) {
+    var c = el('div', 'tile' + (cls ? ' ' + cls : ''));
+    c.appendChild(el('span', 'tile-label', label));
+    c.appendChild(el('span', 'tile-num', valor));
+    if (extra) c.appendChild(el('span', 'tile-extra', extra));
+    return c;
+  }
+
   function filaGrupo(nombre, actual, previo, max) {
     var fila = el('div', 'grupo-fila g-' + slugGrupo(nombre));
     var cab = el('div', 'grupo-cab');
@@ -572,7 +1048,6 @@
     fila.appendChild(cab);
 
     var pista = el('div', 'grupo-pista');
-    // Un grupo en cero no pinta barra: un muñón de color se leería como algo hecho.
     var b1 = el('div', 'grupo-barra act');
     b1.style.width = anchoBarra(actual, max);
     var b2 = el('div', 'grupo-barra ant');
@@ -585,7 +1060,6 @@
 
   function anchoBarra(valor, max) { return (valor > 0 && max ? Math.max(3, valor / max * 100) : 0) + '%'; }
 
-  // Reparto de series por grupo en una sesión: segmentos etiquetados + leyenda.
   function barraDistribucion(grupos) {
     var total = 0;
     Object.keys(grupos).forEach(function (g) { total += grupos[g]; });
@@ -617,73 +1091,124 @@
     return el('span', 'res-delta ' + cls, txt);
   }
 
-  function tile(label, valor, extra, cls) {
-    var c = el('div', 'tile' + (cls ? ' ' + cls : ''));
-    c.appendChild(el('span', 'tile-label', label));
-    c.appendChild(el('span', 'tile-num', valor));
-    if (extra) c.appendChild(el('span', 'tile-extra', extra));
-    return c;
-  }
+  // ── 11. Dashboard Interactivo (Panel Principal) ─────────────────────────────
+  function pintarDashboard() {
+    var h = new Date().getHours();
+    var saludoTxt = h < 12 ? '¡Buenos días! ☀️' : (h < 19 ? '¡Buenas tardes! 💪' : '¡Buenas noches! 🌙');
+    $('dash-saludo').textContent = saludoTxt;
+    $('dash-fecha-hoy').textContent = fmtFechaCorta(new Date()) + ' · Hoy es un gran día para entrenar';
 
-  // ── 5. Navegación ───────────────────────────────────────────────────────────
-  var PANTALLAS = ['inicio', 'sesion', 'historial', 'detalle', 'progreso', 'resumen', 'records'];
-  function irA(nombre) {
-    PANTALLAS.forEach(function (p) { $('pantalla-' + p).classList.toggle('oculto', p !== nombre); });
-    try { window.scrollTo(0, 0); } catch (e) {}
-  }
+    var racha = rachaSemanas();
+    $('dash-racha').textContent = '🔥 ' + racha + (racha === 1 ? ' semana' : ' semanas');
 
-  // ── 6. Pantalla inicio ──────────────────────────────────────────────────────
-  function pintarInicio() {
-    irA('inicio');
-    pintarPanelInicio();
-
-    var sugerida = sesionSugerida();
-    var cont = $('lista-sesiones');
-    cont.innerHTML = '';
-    CAT.sesiones.forEach(function (s) {
-      var card = el('button', 'tarjeta');
-      var cab = el('div', 'hist-cab');
-      cab.appendChild(el('span', null, s.nombre));
-      if (s.nombre === sugerida) cab.appendChild(el('span', 'chip sug', 'sugerida'));
-      card.appendChild(cab);
-      if (s.ejercicios.length) {
-        card.appendChild(el('small', null,
-          s.ejercicios.length + ' ejercicios · ' + s.ejercicios.map(function (e) { return e.nombre; }).slice(0, 2).join(' · ') + '…'));
-        var tira = el('div', 'tira-ilus');
-        s.ejercicios.slice(0, 5).forEach(function (e) { tira.appendChild(ilustracion(e, 'mini')); });
-        card.appendChild(tira);
-      } else {
-        card.appendChild(el('small', null, 'Elige los ejercicios a mano'));
+    // 1. Matriz interactiva de días de la semana (L M X J V S D)
+    var lun = inicioSemana(new Date());
+    var hist = leerHistorial();
+    var diasCont = $('dash-dias-semana');
+    diasCont.innerHTML = '';
+    var letras = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+    for (var d = 0; d < 7; d++) {
+      var fechaDia = new Date(lun.getTime() + d * 864e5);
+      var isoDia = fechaDia.toISOString().slice(0, 10);
+      var esHoy = fechaDia.toDateString() === new Date().toDateString();
+      var sesionesDia = hist.filter(function (s) {
+        return new Date(s.payload.fecha).toISOString().slice(0, 10) === isoDia;
+      });
+      var entrenado = sesionesDia.length > 0;
+      var cardDia = el('div', 'dash-dia-card' + (esHoy ? ' hoy' : '') + (entrenado ? ' entrenado' : ''));
+      cardDia.appendChild(el('span', 'dash-dia-letra', letras[d]));
+      cardDia.appendChild(el('span', 'dash-dia-num', String(fechaDia.getDate())));
+      cardDia.appendChild(el('span', 'dash-dia-dot'));
+      if (entrenado) {
+        cardDia.title = sesionesDia.map(function (s) { return s.payload.titulo; }).join(', ');
+        cardDia.addEventListener('click', function () { irATab('historial'); });
       }
-      card.addEventListener('click', function () { iniciarSesion(s); });
-      cont.appendChild(card);
-    });
-    actualizarPendientes();
-  }
+      diasCont.appendChild(cardDia);
+    }
 
-  function pintarPanelInicio() {
+    // 2. Tarjeta Hero (Sesión en curso o rutina recomendada para hoy)
+    var hero = $('dash-hero-box');
+    hero.innerHTML = '';
+    if (sesion) {
+      var sub = el('div', 'dash-hero-sub', '⚡ ENTRENAMIENTO EN CURSO');
+      var tit = el('div', 'dash-hero-tit', sesion.titulo || 'Sesión activa');
+      var hechas = 0, total = 0;
+      sesion.ejercicios.forEach(function (e) {
+        e.series.forEach(function (s) { total++; if (s.hecha) hechas++; });
+      });
+      var desc = el('div', 'dash-hero-desc', fmtTiempo((Date.now() - sesion.inicio) / 1000) + ' transcurridos · ' + hechas + '/' + total + ' series hechas');
+      var btn = el('button', 'dash-hero-btn', 'Continuar entrenamiento ›');
+      btn.onclick = abrirSesion;
+      hero.appendChild(sub); hero.appendChild(tit); hero.appendChild(desc); hero.appendChild(btn);
+    } else {
+      var sugNombre = sesionSugerida();
+      var sugRutina = todasLasRutinas().filter(function (r) { return r.nombre === sugNombre; })[0] || todasLasRutinas()[0];
+      var sub = el('div', 'dash-hero-sub', '🎯 RUTINA SUGERIDA DE HOY');
+      var tit = el('div', 'dash-hero-tit', sugRutina ? sugRutina.nombre : 'Sesión Libre');
+      var nEjs = sugRutina && sugRutina.ejercicios ? sugRutina.ejercicios.length : 0;
+      var desc = el('div', 'dash-hero-desc', nEjs > 0 ? nEjs + ' ejercicios preparados · ritmo ideal' : 'Diseña tu sesión del día a tu gusto');
+      var btn = el('button', 'dash-hero-btn', 'Empezar ' + (sugRutina ? sugRutina.nombre : 'ahora') + ' ›');
+      btn.onclick = function () { iniciarSesion(sugRutina); };
+      hero.appendChild(sub); hero.appendChild(tit); hero.appendChild(desc); hero.appendChild(btn);
+    }
+
+    // 3. KPIs interactivos de la semana
     var sem = ultimasSemanas(8);
     var esta = sem[sem.length - 1].agg;
-    var total = leerHistorial().length;
-    if (!total) { $('inicio-panel').classList.add('oculto'); return; }
-    $('inicio-panel').classList.remove('oculto');
+    var ant = sem[sem.length - 2].agg;
+    var kpis = $('dash-kpis');
+    kpis.innerHTML = '';
+    kpis.appendChild(tarjetaMetrica('Volumen', esta.volumen, ant.volumen, 'kg'));
+    kpis.appendChild(tarjetaMetrica('Series', esta.nSeries, ant.nSeries, ''));
+    kpis.appendChild(tarjetaMetrica('Sesiones', esta.nSesiones, ant.nSesiones, ''));
+    kpis.appendChild(tarjetaMetrica('Tiempo', esta.tiempoMin, ant.tiempoMin, 'min'));
 
-    var tiles = $('inicio-tiles'); tiles.innerHTML = '';
-    tiles.appendChild(tile('Sesiones', String(esta.nSesiones), 'esta semana'));
-    tiles.appendChild(tile('Volumen', miles(esta.volumen), 'kg esta semana'));
-    tiles.appendChild(tile('Series', String(esta.nSeries), 'esta semana'));
-    tiles.appendChild(tile('Racha', String(rachaSemanas()), 'semanas seguidas'));
+    // 4. Gráfica interactiva de 8 semanas
+    var items = sem.map(function (s, i) {
+      return { etq: s.etq, valor: s.agg.volumen, destacado: i === sem.length - 1 };
+    });
+    pintarChart($('dash-chart-vol'), svgBarras(items, 'kg'), 'Volumen semanal en kilogramos · toca una barra');
 
-    var items = sem.map(function (s, i) { return { etq: s.etq, valor: s.agg.volumen, destacado: i === sem.length - 1 }; });
-    $('inicio-spark').innerHTML = svgSpark(items);
-    var ultima = leerHistorial()[0];
-    $('inicio-spark-pie').textContent = 'Volumen por semana (8 sem)' +
-      (ultima ? ' · última sesión ' + haceTexto(ultima.payload.fecha) : '');
+    // 5. Balance muscular semanal
+    var contBalance = $('dash-balance-muscular');
+    contBalance.innerHTML = '';
+    var dist = barraDistribucion(esta.grupos);
+    if (dist) contBalance.appendChild(dist);
+    else contBalance.appendChild(el('p', 'ayuda', 'Registra tu primera sesión de esta semana para ver la distribución muscular.'));
+
+    var faltan = ['Piernas', 'Empuje', 'Tirón'].filter(function (g) { return !esta.grupos[g]; });
+    if (esta.nSesiones > 0 && faltan.length > 0) {
+      var avisoB = el('div', 'res-aviso', '⚠️ Aún sin tocar esta semana: ' + faltan.join(', ') + '. ¡Prográmalo para un balance óptimo!');
+      contBalance.appendChild(avisoB);
+    }
+
+    // 6. Tip del día con Monigote Animado
+    var tipCard = $('dash-tip-card');
+    tipCard.innerHTML = '';
+    var tipsPool = [
+      { nombre: 'Bench Press', grupo: 'Empuje', tip: 'Retrae las escápulas y apoya bien los pies. Baja con codos a 45° para proteger los hombros.' },
+      { nombre: 'Sentadilla', grupo: 'Piernas', tip: 'Inicia con cadera hacia atrás y mantén el pecho alto. Empuja con todo el pie al subir.' },
+      { nombre: 'Straight Leg Deadlift', grupo: 'Piernas', tip: 'Bisagra de cadera limpia con barra rozando las piernas y espalda neutra.' },
+      { nombre: 'Assisted Pull-up', grupo: 'Tirón', tip: 'Activa las escápulas hacia abajo antes de tirar con los brazos para reclutar los dorsales.' },
+      { nombre: 'Plancha', grupo: 'Core', tip: 'Aprieta glúteos y contrae el abdomen. Mantén una línea recta de la cabeza a los talones.' },
+      { nombre: 'Triceps Pushdown', grupo: 'Empuje', tip: 'Pega los codos al torso y no los muevas. Bloquea abajo apretando el tríceps un segundo.' }
+    ];
+    var idxTip = (new Date().getDate() + new Date().getMonth() * 31) % tipsPool.length;
+    var tipDelDia = tipsPool[idxTip];
+    tipCard.appendChild(ilustracion({ nombre: tipDelDia.nombre, grupo: tipDelDia.grupo }));
+    var txtBox = el('div', 'dash-tip-txt');
+    txtBox.appendChild(el('span', 'dash-tip-badge', 'Técnica de hoy · ' + tipDelDia.nombre));
+    txtBox.appendChild(el('div', 'dash-tip-desc', tipDelDia.tip));
+    tipCard.appendChild(txtBox);
+    tipCard.onclick = function () {
+      abrirModalTecnica(tipDelDia.nombre, tipDelDia.grupo);
+    };
+
+    actualizarBannerSesionActiva();
   }
 
-  // Siguiente sesión de la rotación después de la última que registraste.
   function sesionSugerida() {
-    var conPlan = CAT.sesiones.filter(function (s) { return s.ejercicios.length; });
+    var conPlan = todasLasRutinas().filter(function (s) { return s.ejercicios && s.ejercicios.length; });
     if (!conPlan.length) return null;
     var hist = leerHistorial();
     for (var i = 0; i < hist.length; i++) {
@@ -705,15 +1230,17 @@
     }
   }
 
-  // ── 7. Sesión en curso ──────────────────────────────────────────────────────
-  var INC_KG = 2.5; // subida por defecto cuando llegas al tope del rango
+  // ── 12. Sesión en Curso (Entrenamiento Activo) ──────────────────────────────
+  var INC_KG = 2.5;
 
   function iniciarSesion(plantilla) {
+    if (sesion && !confirm('Tienes un entrenamiento en curso. ¿Descartarlo y empezar este nuevo?')) return;
     sesion = {
       sesion_id: nuevoId(),
       inicio: Date.now(),
       titulo: plantilla.nombre,
-      ejercicios: plantilla.ejercicios.map(clonarEjercicio),
+      peso_hoy: '',
+      ejercicios: (plantilla.ejercicios || []).map(clonarEjercicio),
     };
     guardarBorrador();
     abrirSesion();
@@ -721,8 +1248,8 @@
 
   function clonarEjercicio(e) {
     var ej = {
-      nombre: e.nombre, grupo: e.grupo, tipo: e.tipo, reps: e.reps || '', img: e.img || '',
-      guia: (e.series || '') + ' × ' + (e.reps || '') + '  ·  descanso ' + fmtTiempo(e.descanso || 90),
+      nombre: e.nombre, grupo: e.grupo, tipo: e.tipo || 'peso_reps', reps: e.reps || '', img: e.img || '',
+      guia: (e.series || '') + ' × ' + (e.reps || '') + ' · descanso ' + fmtTiempo(e.descanso || 90),
       descanso: e.descanso || 90, nuevo: !!e.nuevo, nota: '', series: [],
     };
     var n = e.series || 1;
@@ -730,22 +1257,38 @@
     return ej;
   }
 
-  function nuevaSerie() { return { peso: '', reps: '', altura_cm: '', segundos: '', rpe: '', hecha: false }; }
+  function nuevaSerie() {
+    return { peso: '', reps: '', altura_cm: '', segundos: '', rpe: '', tag: 'N', hecha: false };
+  }
   function nuevoId() { return new Date().toISOString(); }
 
   function abrirSesion() {
-    irA('sesion');
+    tabActual = 'sesion';
+    TABS.forEach(function (t) {
+      var btn = $('tab-' + t); if (btn) btn.classList.remove('activo');
+      ocultar('pantalla-' + t);
+    });
+    ocultar('pantalla-detalle');
+    ocultar('pantalla-ajustes');
+    ocultar('banner-sesion-activa');
+
+    mostrar('pantalla-sesion');
     $('titulo-sesion').textContent = sesion.titulo;
     $('chip-rpe').classList.toggle('on', prefs.rpe);
     $('chip-notas').classList.toggle('on', prefs.notas);
     pintarEjercicios();
     arrancarCronoSesion();
+    try { window.scrollTo(0, 0); } catch (e) {}
   }
 
   function arrancarCronoSesion() {
     clearInterval(cronoSesionInt);
     cronoSesionInt = setInterval(function () {
-      $('crono-sesion').textContent = 'sesión ' + fmtTiempo((Date.now() - sesion.inicio) / 1000);
+      if (sesion) {
+        var trans = fmtTiempo((Date.now() - sesion.inicio) / 1000);
+        $('crono-sesion').textContent = trans;
+        actualizarBannerSesionActiva();
+      }
     }, 1000);
   }
 
@@ -806,7 +1349,7 @@
     if (prefs.notas || ej.nota) {
       var nota = el('input', 'ej-nota');
       nota.type = 'text';
-      nota.placeholder = 'Nota (sensaciones, ajustes de máquina…)';
+      nota.placeholder = 'Nota (sensaciones, máquina, ajuste…)';
       nota.value = ej.nota || '';
       nota.addEventListener('input', function () { ej.nota = nota.value; guardarBorrador(); });
       acciones.appendChild(nota);
@@ -819,7 +1362,6 @@
     return caja;
   }
 
-  // Lo que hiciste la última vez, serie por serie (el dato que más se extraña en el gym).
   function bloqueAnterior(ej, prev, stats) {
     var b = el('div', 'anterior');
     var cab = el('div', 'anterior-cab');
@@ -906,7 +1448,26 @@
   function filaSerie(ej, serie, si, stats, prev) {
     var anterior = prev && prev.sets[si] ? prev.sets[si] : null;
     var fila = el('div', 'serie tipo-' + ej.tipo + (prefs.rpe ? ' con-rpe' : ''));
-    fila.appendChild(el('span', 'n', String(si + 1)));
+
+    // Botón interactivo de etiqueta de serie (Normal -> Calentamiento -> Drop Set -> Fallo)
+    var btnTag = el('button', 'btn-tag-serie', serie.tag || String(si + 1));
+    btnTag.title = 'Tipo de serie (Normal, C: Calentamiento, D: Drop Set, F: Fallo)';
+    if (serie.tag && serie.tag !== 'N') {
+      btnTag.classList.add('tag-' + serie.tag);
+      btnTag.textContent = serie.tag;
+    } else {
+      btnTag.textContent = String(si + 1);
+    }
+    btnTag.addEventListener('click', function () {
+      var tags = ['N', 'W', 'D', 'F'];
+      var curIdx = tags.indexOf(serie.tag || 'N');
+      var sig = tags[(curIdx + 1) % tags.length];
+      serie.tag = sig;
+      btnTag.className = 'btn-tag-serie' + (sig !== 'N' ? ' tag-' + sig : '');
+      btnTag.textContent = sig === 'N' ? String(si + 1) : sig;
+      guardarBorrador();
+    });
+    fila.appendChild(btnTag);
 
     function revisar() {
       fila.classList.toggle('pr', esPR(stats, serie, ej.tipo));
@@ -941,7 +1502,7 @@
       guardarBorrador();
       revisar();
       actualizarStatsSesion();
-      if (serie.hecha) iniciarDescanso(ej.descanso);
+      if (serie.hecha) iniciarDescanso(ej.descanso, ej.nombre);
     });
     fila.appendChild(check);
 
@@ -952,12 +1513,10 @@
     borrar.addEventListener('click', function () { quitarSerie(ej, si); });
     fila.appendChild(borrar);
 
-    revisar(); // por si vuelves a una sesión con valores del borrador
+    revisar();
     return fila;
   }
 
-  // El valor de la sesión anterior va como placeholder: lo ves dentro de la casilla
-  // y desaparece en cuanto escribes el de hoy.
   function campoNum(serie, campo, unidad, anterior) {
     var wrap = el('div', 'campo');
     var inp = el('input');
@@ -986,7 +1545,6 @@
     return r > ar;
   }
 
-  // ¿La serie que acabas de meter supera tu mejor marca previa? (solo si ya hay historia)
   function esPR(stats, serie, tipo) {
     if (!stats || !stats.ultima) return false;
     var p = num(serie.peso) || 0, r = num(serie.reps) || 0, a = num(serie.altura_cm) || 0, g = num(serie.segundos) || 0;
@@ -997,7 +1555,6 @@
     return false;
   }
 
-  // Sugerencia de progresión (solo fuerza): si el tope del rango se cumplió, +2.5 kg.
   function sugerencia_(ej, stats) {
     if (ej.tipo !== 'peso_reps' || !stats.ultima) return null;
     var t = stats.ultima.top, peso = num(t.peso) || 0, reps = num(t.reps) || 0;
@@ -1009,7 +1566,6 @@
     return 'Hoy: ' + peso + ' kg';
   }
 
-  // Marcador en vivo de la sesión: series hechas, volumen y comparación con la vez pasada.
   function actualizarStatsSesion() {
     if (!sesion) return;
     var hechas = 0, total = 0, vol = 0, ejsConDato = 0;
@@ -1028,7 +1584,10 @@
     tiles.appendChild(tile('Series', hechas + '/' + total, 'hechas'));
     tiles.appendChild(tile('Volumen', miles(vol), 'kg'));
     tiles.appendChild(tile('Ejercicios', ejsConDato + '/' + sesion.ejercicios.length, 'con datos'));
-    $('sesion-barra-prog').firstChild.style.width = (total ? hechas / total * 100 : 0) + '%';
+    var barra = $('sesion-barra-prog');
+    if (barra && barra.firstChild) {
+      barra.firstChild.style.width = (total ? hechas / total * 100 : 0) + '%';
+    }
 
     piesEjercicio.forEach(function (ref) {
       var hoyVol = volumenSets(ref.ej.series.map(function (s) {
@@ -1037,45 +1596,23 @@
       var hechasEj = ref.ej.series.filter(function (s) { return s.hecha; }).length;
       var antVol = ref.prev ? volumenSets(ref.prev.sets) : 0;
       var txt = 'Hoy: ' + hechasEj + '/' + ref.ej.series.length + ' series';
-      // El volumen se muestra como "lo de hoy / lo de la vez pasada": a media sesión
-      // una resta suelta se leería como retroceso cuando solo faltan series.
       if (hoyVol > 0 || antVol > 0) {
         txt += ' · ' + miles(hoyVol) + (antVol > 0 ? ' / ' + miles(antVol) : '') + ' kg';
         if (antVol > 0) txt += ' de la vez pasada';
       }
       ref.nodo.textContent = txt;
     });
+
+    actualizarBannerSesionActiva();
   }
 
-  // ── Cronómetro de descanso ──────────────────────────────────────────────────
-  var descansoRestante = 0;
-  function iniciarDescanso(seg) {
-    descansoRestante = seg || 90;
-    mostrar('descanso');
-    pintarDescanso();
-    clearInterval(descansoInt);
-    descansoInt = setInterval(function () {
-      descansoRestante--;
-      pintarDescanso();
-      if (descansoRestante <= 0) finDescanso();
-    }, 1000);
-  }
-  function pintarDescanso() { $('descanso-tiempo').textContent = fmtTiempo(descansoRestante); }
-  function finDescanso() {
-    clearInterval(descansoInt);
-    var d = $('descanso');
-    d.classList.add('suena');
-    vibrar([200, 100, 200]);
-    setTimeout(function () { d.classList.remove('suena'); ocultar('descanso'); }, 1800);
-  }
-  function vibrar(p) { if (navigator.vibrate) try { navigator.vibrate(p); } catch (e) {} }
-
-  // ── Selector de ejercicio (para "Libre" o añadir extra) ─────────────────────
-  function abrirSelector() {
+  // ── 13. Selector de Ejercicios del Catálogo ─────────────────────────────────
+  function abrirSelector(cbAlElegir) {
     var lista = todosLosEjercicios();
     var cont = $('selector-lista');
     var buscar = $('selector-buscar');
     buscar.value = '';
+
     function pintar(filtro) {
       cont.innerHTML = '';
       lista.filter(function (e) { return !filtro || e.nombre.toLowerCase().indexOf(filtro.toLowerCase()) >= 0; })
@@ -1091,14 +1628,18 @@
           item.appendChild(txt);
           item.appendChild(el('span', 'chip' + (e.nuevo ? ' nuevo' : ''), e.nuevo ? 'nuevo' : e.grupo));
           item.addEventListener('click', function () {
-            sesion.ejercicios.push(clonarEjercicio(e));
-            guardarBorrador();
             cerrarSelector();
-            pintarEjercicios();
+            if (cbAlElegir) cbAlElegir(e);
+            else if (sesion) {
+              sesion.ejercicios.push(clonarEjercicio(e));
+              guardarBorrador();
+              pintarEjercicios();
+            }
           });
           cont.appendChild(item);
         });
     }
+
     pintar('');
     buscar.oninput = function () { pintar(buscar.value); };
     mostrar('selector');
@@ -1108,21 +1649,26 @@
 
   function todosLosEjercicios() {
     var vistos = {}, out = [];
-    CAT.sesiones.forEach(function (s) {
-      s.ejercicios.forEach(function (e) { if (!vistos[e.nombre]) { vistos[e.nombre] = 1; out.push(e); } });
+    todasLasRutinas().forEach(function (s) {
+      (s.ejercicios || []).forEach(function (e) {
+        if (!vistos[e.nombre]) { vistos[e.nombre] = 1; out.push(e); }
+      });
     });
-    (CAT.extras || []).forEach(function (e) { if (!vistos[e.nombre]) { vistos[e.nombre] = 1; out.push(e); } });
-    // Lo que ya registraste pero no está en el catálogo también debe poder repetirse.
+    (CAT.extras || []).forEach(function (e) {
+      if (!vistos[e.nombre]) { vistos[e.nombre] = 1; out.push(e); }
+    });
     ejerciciosDeHistorial().forEach(function (e) {
-      if (!vistos[e.nombre]) { vistos[e.nombre] = 1; out.push({ nombre: e.nombre, grupo: e.grupo, tipo: e.tipo, series: 3, reps: '', descanso: 90 }); }
+      if (!vistos[e.nombre]) {
+        vistos[e.nombre] = 1;
+        out.push({ nombre: e.nombre, grupo: e.grupo, tipo: e.tipo, series: 3, reps: '8-10', descanso: 90 });
+      }
     });
     out.sort(function (a, b) { return a.nombre.localeCompare(b.nombre); });
     return out;
   }
 
-  // ── 8. Historial y detalle ──────────────────────────────────────────────────
+  // ── 14. Historial, Detalle y Resumen ─────────────────────────────────────────
   function abrirHistorial() {
-    irA('historial');
     var hist = leerHistorial();
     $('hist-vacio').classList.toggle('oculto', hist.length > 0);
 
@@ -1148,7 +1694,7 @@
     cab.appendChild(el('span', null, p.titulo || 'Sesión'));
     cab.appendChild(el('span', 'chip' + (h.subida ? '' : ' pend'), h.subida ? '✓ subida' : '↑ pendiente'));
     card.appendChild(cab);
-    card.appendChild(el('small', null, fmtFecha(p.fecha) + '  ·  ' + statsSesion(p)));
+    card.appendChild(el('small', null, fmtFecha(p.fecha) + ' · ' + statsSesion(p)));
 
     var grupos = {};
     p.sets.forEach(function (s) { var g = s.grupo || 'Otros'; grupos[g] = (grupos[g] || 0) + 1; });
@@ -1163,16 +1709,19 @@
     var hist = leerHistorial();
     var h = hist[i]; if (!h) return;
     var p = h.payload;
-    irA('detalle');
+
+    TABS.forEach(function (t) { ocultar('pantalla-' + t); });
+    mostrar('pantalla-detalle');
+
     $('detalle-titulo').textContent = p.titulo || 'Sesión';
-    $('detalle-sub').textContent = fmtFecha(p.fecha) + (h.subida ? '  ·  ✓ subida' : '  ·  ↑ pendiente');
+    $('detalle-sub').textContent = fmtFecha(p.fecha) + (h.subida ? ' · ✓ subida al Sheet' : ' · ↑ pendiente de subir');
 
     var ejs = agruparPorEjercicio(p.sets);
     var vol = volumenSets(p.sets);
     var reps = p.sets.reduce(function (m, s) { return m + (num(s.reps) || 0); }, 0);
 
     var tiles = $('detalle-tiles'); tiles.innerHTML = '';
-    tiles.appendChild(tile('Duración', (p.durMin || 0) + '', 'min'));
+    tiles.appendChild(tile('Duración', (p.durMin || 0) + '', 'minutos'));
     tiles.appendChild(tile('Ejercicios', String(ejs.length), ''));
     tiles.appendChild(tile('Series', String(p.sets.length), reps + ' reps'));
     tiles.appendChild(tile('Volumen', miles(vol), 'kg'));
@@ -1196,7 +1745,11 @@
       cab.appendChild(tit);
       var bp = el('button', 'mini-prog', '📈');
       bp.title = 'Ver progreso de ' + g.ej;
-      bp.addEventListener('click', function (ev) { ev.stopPropagation(); abrirProgreso(g.ej); });
+      bp.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        irATab('progreso');
+        abrirProgreso(g.ej);
+      });
       cab.appendChild(bp);
       caja.appendChild(cab);
 
@@ -1216,11 +1769,10 @@
     $('btn-det-borrar').onclick = function () {
       if (!confirm('¿Borrar esta sesión del historial del celular? No afecta lo ya guardado en el Sheet.')) return;
       var h2 = leerHistorial(); h2.splice(i, 1); escribirHistorial(h2);
-      abrirHistorial();
+      irATab('historial');
     };
   }
 
-  // Arranca una sesión nueva con los mismos ejercicios y series de una ya hecha.
   function repetirSesion(p) {
     if (sesion && !confirm('Tienes una sesión en curso. ¿Descartarla y empezar esta?')) return;
     var plantilla = {
@@ -1241,9 +1793,90 @@
     iniciarSesion(plantilla);
   }
 
-  // ── 9. Progreso · Resumen · Récords ─────────────────────────────────────────
+  function abrirResumen() {
+    var sem = ultimasSemanas(8);
+    var esta = sem[sem.length - 1].agg;
+    var ant = sem[sem.length - 2].agg;
+    var iniEsta = sem[sem.length - 1].desde;
+
+    $('res-rango').textContent = fmtRango(iniEsta, new Date(iniEsta.getTime() + 6 * 864e5));
+
+    var vacio = esta.nSesiones === 0 && ant.nSesiones === 0;
+    $('res-vacio').classList.toggle('oculto', !vacio);
+    ['res-metricas', 'res-grupos', 'res-chart', 'res-chips', 'res-prs'].forEach(vaciar);
+    ['res-h-grupos', 'res-h-tend', 'res-h-prs', 'res-descubiertos'].forEach(function (id) { $(id).classList.add('oculto'); });
+    if (vacio && leerHistorial().length === 0) return;
+
+    var met = $('res-metricas');
+    met.appendChild(tarjetaMetrica('Sesiones', esta.nSesiones, ant.nSesiones, ''));
+    met.appendChild(tarjetaMetrica('Series', esta.nSeries, ant.nSeries, ''));
+    met.appendChild(tarjetaMetrica('Volumen', esta.volumen, ant.volumen, 'kg'));
+    met.appendChild(tarjetaMetrica('Tiempo', esta.tiempoMin, ant.tiempoMin, 'min'));
+
+    var descub = ['Piernas', 'Empuje', 'Tirón'].filter(function (g) { return !esta.grupos[g]; });
+    if (descub.length) {
+      $('res-descubiertos').textContent = '⚠️ Sin tocar esta semana: ' + descub.join(', ');
+      $('res-descubiertos').classList.remove('oculto');
+    }
+
+    var METRICAS_RES = [
+      { id: 'volumen', etq: 'Volumen', unidad: 'kg', val: function (a) { return a.volumen; } },
+      { id: 'series', etq: 'Series', unidad: '', val: function (a) { return a.nSeries; } },
+      { id: 'sesiones', etq: 'Sesiones', unidad: '', val: function (a) { return a.nSesiones; } },
+      { id: 'tiempo', etq: 'Minutos', unidad: 'min', val: function (a) { return a.tiempoMin; } },
+    ];
+    var mr = METRICAS_RES.filter(function (m) { return m.id === resMetricaId; })[0] || METRICAS_RES[0];
+    $('res-h-tend').classList.remove('oculto');
+    var chips = $('res-chips');
+    METRICAS_RES.forEach(function (m) {
+      var b = el('button', 'chip-btn' + (m.id === mr.id ? ' on' : ''), m.etq);
+      b.addEventListener('click', function () { resMetricaId = m.id; abrirResumen(); });
+      chips.appendChild(b);
+    });
+    var items = sem.map(function (s, i) { return { etq: s.etq, valor: mr.val(s.agg), destacado: i === sem.length - 1 }; });
+    pintarChart($('res-chart'), svgBarras(items, mr.unidad), mr.etq + ' por semana · toca una barra');
+
+    var claves = Object.keys(esta.grupos).concat(Object.keys(ant.grupos));
+    var vistos = {}, grupos = [];
+    ['Piernas', 'Empuje', 'Tirón', 'Pliometría', 'Core', 'Otros'].forEach(function (g) {
+      if (claves.indexOf(g) >= 0 && !vistos[g]) { vistos[g] = 1; grupos.push(g); }
+    });
+    claves.forEach(function (g) { if (!vistos[g]) { vistos[g] = 1; grupos.push(g); } });
+    if (grupos.length) {
+      $('res-h-grupos').classList.remove('oculto');
+      var max = grupos.reduce(function (m, g) { return Math.max(m, esta.grupos[g] || 0, ant.grupos[g] || 0); }, 0);
+      var cont = $('res-grupos');
+      grupos.forEach(function (g) { cont.appendChild(filaGrupo(g, esta.grupos[g] || 0, ant.grupos[g] || 0, max)); });
+    }
+
+    var prs = prsEnRango(iniEsta, new Date(iniEsta.getTime() + 7 * 864e5));
+    if (prs.length) {
+      $('res-h-prs').classList.remove('oculto');
+      var cp = $('res-prs');
+      prs.forEach(function (pr) {
+        var fila = el('div', 'rec-fila');
+        fila.appendChild(ilustracion({ nombre: pr.ej, grupo: pr.grupo }, 'mini'));
+        var t = el('div', 'rec-txt');
+        t.appendChild(el('span', 'rec-nom', pr.ej));
+        t.appendChild(el('small', null, fmtFechaCorta(pr.fecha)));
+        fila.appendChild(t);
+        fila.appendChild(el('span', 'rec-val', '★ ' + pr.texto));
+        cp.appendChild(fila);
+      });
+    }
+  }
+
+  function tarjetaMetrica(label, actual, previo, unidad) {
+    var c = el('div', 'tile');
+    c.appendChild(el('span', 'tile-label', label));
+    c.appendChild(el('span', 'tile-num', miles(actual) + (unidad ? ' ' + unidad : '')));
+    c.appendChild(deltaChip(actual, previo, unidad));
+    c.appendChild(el('span', 'tile-extra', 'anterior ' + miles(previo)));
+    return c;
+  }
+
+  // ── 15. Progreso por Ejercicio y Salón de PRs ────────────────────────────────
   function abrirProgreso(preselec) {
-    irA('progreso');
     var sel = $('prog-ejercicio');
     var lista = ejerciciosDeHistorial();
     sel.innerHTML = '';
@@ -1259,8 +1892,9 @@
       return;
     }
     if (preselec && lista.some(function (e) { return e.nombre === preselec; })) sel.value = preselec;
-    progMetricaId = null; // cada ejercicio arranca en su métrica natural
+    progMetricaId = null;
     renderProgreso(sel.value);
+    abrirRecords();
   }
 
   function renderProgreso(nombre) {
@@ -1269,7 +1903,9 @@
     var metrica = metricas.filter(function (m) { return m.id === progMetricaId; })[0] || metricas[0];
     progMetricaId = metrica.id;
 
-    $('prog-ilus').innerHTML = ILUS.svgDe(nombre, st.grupo);
+    var progIlus = $('prog-ilus');
+    progIlus.innerHTML = ILUS.svgDe(nombre, st.grupo);
+    progIlus.onclick = function () { abrirModalTecnica(nombre, st.grupo); };
 
     var chips = $('prog-chips'); chips.innerHTML = '';
     metricas.forEach(function (m) {
@@ -1289,13 +1925,13 @@
       var dif = redondear(ultimo - primero);
       var pct = primero ? Math.round((ultimo - primero) / primero * 100) : null;
       var signo = dif > 0 ? '▲ +' : dif < 0 ? '▼ ' : '● ';
-      resumen.appendChild(el('span', 'prog-delta ' + (dif > 0 ? 'sube' : dif < 0 ? 'baja' : ''),
+      resumen.appendChild(el('span', 'res-delta ' + (dif > 0 ? 'sube' : dif < 0 ? 'baja' : ''),
         signo + dif + ' ' + metrica.unidad + (pct != null ? ' (' + (pct >= 0 ? '+' : '') + pct + '%)' : '')));
     }
     resumen.appendChild(el('small', null, 'desde ' + fmtDiaMes(pts[0].fecha)));
 
     pintarChart($('prog-chart'), svgLinea(pts, metrica.unidad),
-      metrica.etq + ' por sesión · toca un punto para ver la fecha');
+      metrica.etq + ' por sesión · toca un punto para ver fecha y valor');
 
     var tiles = $('prog-tiles');
     tiles.appendChild(tile('Sesiones', String(st.nSesiones), 'registradas'));
@@ -1314,7 +1950,6 @@
       tiles.appendChild(tile('Última vez', haceTexto(st.ultimaFecha), ''));
     }
 
-    // Segunda gráfica: carga total por sesión (volumen en fuerza, reps en el resto).
     var esFuerza = st.tipo === 'peso_reps';
     var barras = pts.slice(-8).map(function (p, i, arr) {
       var v = esFuerza ? Math.round(volumenSets(p.sets)) : p.sets.reduce(function (m, s) { return m + (num(s.reps) || 0); }, 0);
@@ -1325,7 +1960,6 @@
     pintarChart($('prog-chart2'), svgBarras(barras, esFuerza ? 'kg' : 'reps'),
       'Últimas ' + barras.length + ' sesiones · toca una barra');
 
-    // Tabla: cada sesión con TODAS sus series, que es el detalle que se consulta.
     $('prog-h-hist').classList.remove('oculto');
     var tabla = $('prog-tabla');
     pts.slice().reverse().slice(0, 8).forEach(function (p) {
@@ -1346,95 +1980,7 @@
     });
   }
 
-  var ORDEN_GRUPOS = ['Piernas', 'Empuje', 'Tirón', 'Pliometría', 'Core', 'Otros'];
-  var GRUPOS_OBJETIVO = ['Piernas', 'Empuje', 'Tirón']; // deberían tocarse cada semana
-
-  function abrirResumen() {
-    irA('resumen');
-    var sem = ultimasSemanas(8);
-    var esta = sem[sem.length - 1].agg;
-    var ant = sem[sem.length - 2].agg;
-    var iniEsta = sem[sem.length - 1].desde;
-
-    $('res-rango').textContent = fmtRango(iniEsta, new Date(iniEsta.getTime() + 6 * 864e5));
-
-    var vacio = esta.nSesiones === 0 && ant.nSesiones === 0;
-    $('res-vacio').classList.toggle('oculto', !vacio);
-    ['res-metricas', 'res-grupos', 'res-chart', 'res-chips', 'res-prs'].forEach(vaciar);
-    ['res-h-grupos', 'res-h-tend', 'res-h-prs', 'res-descubiertos'].forEach(function (id) { $(id).classList.add('oculto'); });
-    if (vacio && leerHistorial().length === 0) return;
-
-    var met = $('res-metricas');
-    met.appendChild(tarjetaMetrica('Sesiones', esta.nSesiones, ant.nSesiones, ''));
-    met.appendChild(tarjetaMetrica('Series', esta.nSeries, ant.nSeries, ''));
-    met.appendChild(tarjetaMetrica('Volumen', esta.volumen, ant.volumen, 'kg'));
-    met.appendChild(tarjetaMetrica('Tiempo', esta.tiempoMin, ant.tiempoMin, 'min'));
-
-    var descub = GRUPOS_OBJETIVO.filter(function (g) { return !esta.grupos[g]; });
-    if (descub.length) {
-      $('res-descubiertos').textContent = '⚠️ Sin tocar esta semana: ' + descub.join(', ');
-      $('res-descubiertos').classList.remove('oculto');
-    }
-
-    // Tendencia de 8 semanas, con la métrica que elijas.
-    var METRICAS_RES = [
-      { id: 'volumen', etq: 'Volumen', unidad: 'kg', val: function (a) { return a.volumen; } },
-      { id: 'series', etq: 'Series', unidad: '', val: function (a) { return a.nSeries; } },
-      { id: 'sesiones', etq: 'Sesiones', unidad: '', val: function (a) { return a.nSesiones; } },
-      { id: 'tiempo', etq: 'Minutos', unidad: 'min', val: function (a) { return a.tiempoMin; } },
-    ];
-    var mr = METRICAS_RES.filter(function (m) { return m.id === resMetricaId; })[0] || METRICAS_RES[0];
-    $('res-h-tend').classList.remove('oculto');
-    var chips = $('res-chips');
-    METRICAS_RES.forEach(function (m) {
-      var b = el('button', 'chip-btn' + (m.id === mr.id ? ' on' : ''), m.etq);
-      b.addEventListener('click', function () { resMetricaId = m.id; abrirResumen(); });
-      chips.appendChild(b);
-    });
-    var items = sem.map(function (s, i) { return { etq: s.etq, valor: mr.val(s.agg), destacado: i === sem.length - 1 }; });
-    pintarChart($('res-chart'), svgBarras(items, mr.unidad), mr.etq + ' por semana · toca una barra');
-
-    // Series por grupo: esta semana contra la anterior.
-    var claves = Object.keys(esta.grupos).concat(Object.keys(ant.grupos));
-    var vistos = {}, grupos = [];
-    ORDEN_GRUPOS.forEach(function (g) { if (claves.indexOf(g) >= 0 && !vistos[g]) { vistos[g] = 1; grupos.push(g); } });
-    claves.forEach(function (g) { if (!vistos[g]) { vistos[g] = 1; grupos.push(g); } });
-    if (grupos.length) {
-      $('res-h-grupos').classList.remove('oculto');
-      var max = grupos.reduce(function (m, g) { return Math.max(m, esta.grupos[g] || 0, ant.grupos[g] || 0); }, 0);
-      var cont = $('res-grupos');
-      grupos.forEach(function (g) { cont.appendChild(filaGrupo(g, esta.grupos[g] || 0, ant.grupos[g] || 0, max)); });
-    }
-
-    // Récords conseguidos esta semana.
-    var prs = prsEnRango(iniEsta, new Date(iniEsta.getTime() + 7 * 864e5));
-    if (prs.length) {
-      $('res-h-prs').classList.remove('oculto');
-      var cp = $('res-prs');
-      prs.forEach(function (pr) {
-        var fila = el('div', 'rec-fila');
-        fila.appendChild(ilustracion({ nombre: pr.ej, grupo: pr.grupo }, 'mini'));
-        var t = el('div', 'rec-txt');
-        t.appendChild(el('span', 'rec-nom', pr.ej));
-        t.appendChild(el('small', null, fmtFechaCorta(pr.fecha)));
-        fila.appendChild(t);
-        fila.appendChild(el('span', 'rec-val', '★ ' + pr.texto));
-        cp.appendChild(fila);
-      });
-    }
-  }
-
-  function tarjetaMetrica(label, actual, previo, unidad) {
-    var c = el('div', 'res-card');
-    c.appendChild(el('span', 'res-label', label));
-    c.appendChild(el('span', 'res-num', miles(actual) + (unidad ? ' ' + unidad : '')));
-    c.appendChild(deltaChip(actual, previo, unidad));
-    c.appendChild(el('span', 'res-prev', 'antes ' + miles(previo)));
-    return c;
-  }
-
   function abrirRecords() {
-    irA('records');
     var lista = ejerciciosDeHistorial();
     $('records-vacio').classList.toggle('oculto', lista.length > 0);
 
@@ -1453,59 +1999,73 @@
     lista.filter(function (e) { return recGrupo === 'Todos' || e.grupo === recGrupo; })
       .forEach(function (e) {
         var st = statsEjercicio(e.nombre);
-        var fila = el('button', 'rec-fila');
+        var fila = el('button', 'tarjeta');
+        fila.style.display = 'flex'; fila.style.alignItems = 'center'; fila.style.gap = '12px'; fila.style.padding = '12px';
         fila.appendChild(ilustracion(e, 'mini'));
         var t = el('div', 'rec-txt');
         t.appendChild(el('span', 'rec-nom', e.nombre));
-        t.appendChild(el('small', null, st.nSesiones + ' sesiones · última ' + haceTexto(st.ultimaFecha)
-          + (st.fechaMejor ? ' · PR ' + fmtDiaMes(st.fechaMejor) : '')));
+        t.appendChild(el('small', null, st.nSesiones + ' sesiones · PR ' + (st.fechaMejor ? fmtDiaMes(st.fechaMejor) : '—')));
         fila.appendChild(t);
-        fila.appendChild(el('span', 'rec-val', recMarca_(st)));
-        fila.addEventListener('click', function () { abrirProgreso(e.nombre); });
+        fila.appendChild(el('span', 'chip sug', recMarca_(st)));
+        fila.addEventListener('click', function () {
+          $('subtab-prog-ej').click();
+          $('prog-ejercicio').value = e.nombre;
+          renderProgreso(e.nombre);
+        });
         cont.appendChild(fila);
       });
   }
 
   function recMarca_(st) {
-    if (st.tipo === 'peso_reps') return (st.mejorPeso || 0) + ' kg' + (st.mejorE1rm ? '  ·  e1RM ' + st.mejorE1rm : '');
+    if (st.tipo === 'peso_reps') return (st.mejorPeso || 0) + ' kg' + (st.mejorE1rm ? ' (e1RM ' + st.mejorE1rm + ')' : '');
     if (st.tipo === 'pliometria') return st.mejorAltura ? st.mejorAltura + ' cm' : (st.mejorReps || 0) + ' reps';
     if (st.tipo === 'tiempo') return (st.mejorSeg || 0) + ' s';
     return (st.mejorReps || 0) + ' reps';
   }
 
-  // ── 10. Guardar / sincronizar / arranque ────────────────────────────────────
+  // ── 16. Guardar Sesión y Sincronización ─────────────────────────────────────
   function guardarSesion() {
     var payload = construirPayload();
     if (!payload.sets.length) { aviso('No hay series con datos para guardar.', true); return; }
+
+    // Si el usuario anotó su peso corporal hoy, registrarlo automáticamente en el Body Tracker
+    var inputPesoSesion = $('input-peso-sesion');
+    if (inputPesoSesion && inputPesoSesion.value) {
+      registrarPeso(inputPesoSesion.value, new Date().toISOString().slice(0, 10), 'En sesión: ' + sesion.titulo);
+    }
 
     var cola = leerCola();
     cola.push(payload);
     escribirCola(cola);
 
-    // Guarda también en el historial local (persiste aunque la cola se limpie al subir).
     var hist = leerHistorial();
     hist.unshift({ payload: payload, subida: false, guardadaEn: Date.now() });
     escribirHistorial(hist.slice(0, HIST_MAX));
 
     localStorage.removeItem(BORRADOR_KEY);
-
     clearInterval(cronoSesionInt);
     sesion = null;
-    pintarInicio();
-    aviso('Sesión guardada. Sincronizando…');
+
+    irATab('dashboard');
+    aviso('¡Sesión guardada! Sincronizando…');
     sincronizar();
   }
 
-  // Convierte la sesión en curso al formato del backend (una entrada por serie con reps > 0).
   function construirPayload() {
     var sets = [];
     sesion.ejercicios.forEach(function (ej) {
       ej.series.forEach(function (serie, si) {
         var reps = num(serie.reps);
         var segundos = num(serie.segundos);
-        // Se guarda si hay reps, o si es isométrico con segundos.
         var repsEfectivas = reps != null ? reps : (segundos != null ? 1 : null);
         if (repsEfectivas == null || repsEfectivas <= 0) return;
+
+        // Si la serie tiene etiqueta especial (Calentamiento, Drop Set, Fallo), reflejarla en la nota
+        var tagPrefijo = '';
+        if (serie.tag === 'W') tagPrefijo = '[Calentamiento] ';
+        else if (serie.tag === 'D') tagPrefijo = '[Drop Set] ';
+        else if (serie.tag === 'F') tagPrefijo = '[Al Fallo] ';
+
         sets.push({
           ej: ej.nombre, grupo: ej.grupo, tipo: ej.tipo, serie: si + 1,
           peso: num(serie.peso) != null ? num(serie.peso) : 0,
@@ -1513,7 +2073,7 @@
           altura_cm: num(serie.altura_cm),
           segundos: segundos,
           rpe: num(serie.rpe),
-          nota: ej.nota || '',
+          nota: (tagPrefijo + (ej.nota || '')).trim(),
         });
       });
     });
@@ -1531,7 +2091,7 @@
     if (!cola.length) { marcarEstado('ok'); actualizarPendientes(); return; }
     if (!CFG.EXEC_URL) {
       marcarEstado('sinc');
-      aviso('Guardado en el celular. Configura EXEC_URL para subir al Sheet.');
+      aviso('Guardado localmente. Configura EXEC_URL para subir al Sheet.');
       actualizarPendientes();
       return;
     }
@@ -1540,38 +2100,38 @@
     marcarEstado('sinc');
     fetch(CFG.EXEC_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // text/plain evita el preflight CORS
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ secreto: secretoParaSubir(), sesiones: cola }),
     })
       .then(function (r) { return r.json(); })
       .then(function (res) {
         if (res && res.ok) {
-          escribirCola([]); // el backend es idempotente por sesion_id
+          escribirCola([]);
           marcarSubidas(cola);
           marcarEstado('ok');
-          aviso('Subido: ' + (res.sesiones || cola.length) + ' sesión(es).');
+          aviso('Subido: ' + (res.sesiones || cola.length) + ' sesión(es) a Google Sheets.');
         } else {
           marcarEstado('error');
           if (/autoriz/i.test((res && res.error) || '')) {
             localStorage.removeItem(SECRETO_KEY);
-            aviso('Clave incorrecta. La borré; te la pediré de nuevo al reintentar.', true);
+            aviso('Clave incorrecta. Se pedirá de nuevo al reintentar.', true);
           } else {
-            aviso('El servidor rechazó los datos: ' + (res && res.error || '?'), true);
+            aviso('Servidor Apps Script: ' + (res && res.error || '?'), true);
           }
         }
         actualizarPendientes();
       })
       .catch(function () {
         marcarEstado('error');
-        aviso('Sin conexión. Se reintenta luego.', true);
+        aviso('Sin conexión a internet. Reintentando después.', true);
         actualizarPendientes();
       });
   }
 
   function marcarEstado(clase) {
     var e = $('estado');
+    if (!e) return;
     e.className = 'estado ' + clase;
-    e.textContent = clase === 'ok' ? '✓' : clase === 'error' ? '!' : clase === 'sinc' ? '↑' : '•';
   }
 
   function recuperarBorrador() {
@@ -1580,7 +2140,7 @@
       if (b && b.ejercicios) {
         sesion = b;
         abrirSesion();
-        aviso('Retomando tu sesión en curso.');
+        aviso('Retomando sesión en curso.');
       }
     } catch (e) {}
   }
@@ -1590,26 +2150,126 @@
     clearInterval(cronoSesionInt);
     sesion = null;
     localStorage.removeItem(BORRADOR_KEY);
-    pintarInicio();
+    irATab('dashboard');
+    aviso('Sesión descartada.');
   }
 
+  // ── 17. Ajustes, Backup y Configuración ─────────────────────────────────────
+  function pintarAjustes() {
+    TABS.forEach(function (t) { ocultar('pantalla-' + t); });
+    ocultar('pantalla-sesion');
+    ocultar('pantalla-detalle');
+    mostrar('pantalla-ajustes');
+
+    $('btn-ajuste-audio').textContent = prefs.audioDescanso ? 'Activado' : 'Silenciado';
+    $('btn-ajuste-audio').classList.toggle('on', prefs.audioDescanso);
+
+    $('btn-ajuste-vibrar').textContent = prefs.vibrarDescanso ? 'Activada' : 'Desactivada';
+    $('btn-ajuste-vibrar').classList.toggle('on', prefs.vibrarDescanso);
+
+    $('btn-ajuste-anim').textContent = prefs.animaciones ? 'Activadas' : 'Pausadas';
+    $('btn-ajuste-anim').classList.toggle('on', prefs.animaciones);
+
+    $('ajustes-sync-status').textContent = CFG.EXEC_URL ? 'Conectado a Google Sheets' : 'Pendiente URL /exec';
+  }
+
+  function exportarDatos() {
+    var backup = {
+      fecha: new Date().toISOString(),
+      historial: leerHistorial(),
+      pesos: leerPesos(),
+      rutinas: leerRutinasCustom(),
+      prefs: prefs
+    };
+    var blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'migym_backup_' + new Date().toISOString().slice(0, 10) + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    aviso('Backup descargado correctamente.');
+  }
+
+  function importarDatos(archivo) {
+    if (!archivo) return;
+    var lector = new FileReader();
+    lector.onload = function (e) {
+      try {
+        var data = JSON.parse(e.target.result);
+        if (data.historial && Array.isArray(data.historial)) escribirHistorial(data.historial);
+        if (data.pesos && Array.isArray(data.pesos)) guardarPesos(data.pesos);
+        if (data.rutinas && Array.isArray(data.rutinas)) guardarRutinasCustom(data.rutinas);
+        aviso('Datos importados con éxito.');
+        irATab('dashboard');
+      } catch (err) {
+        aviso('Error al leer el archivo de backup JSON.', true);
+      }
+    };
+    lector.readAsText(archivo);
+  }
+
+  // ── 18. Inicialización y Eventos ────────────────────────────────────────────
   function init() {
     leerPrefs();
-    pintarInicio();
+    irATab('dashboard');
 
-    $('btn-volver').addEventListener('click', function () {
-      // Volver al inicio conservando el borrador (no descarta).
-      clearInterval(cronoSesionInt);
-      pintarInicio();
+    // Eventos de TabBar
+    TABS.forEach(function (t) {
+      var btn = $('tab-' + t);
+      if (btn) btn.addEventListener('click', function () { irATab(t); });
+    });
+
+    // Subtabs de Progreso
+    $('subtab-prog-ej').addEventListener('click', function () {
+      $('subtab-prog-ej').classList.add('on');
+      $('subtab-prog-prs').classList.remove('on');
+      mostrar('vista-prog-ejercicio');
+      ocultar('vista-prog-prs');
+    });
+    $('subtab-prog-prs').addEventListener('click', function () {
+      $('subtab-prog-prs').classList.add('on');
+      $('subtab-prog-ej').classList.remove('on');
+      ocultar('vista-prog-ejercicio');
+      mostrar('vista-prog-prs');
+      abrirRecords();
+    });
+
+    // Subtabs de Historial
+    $('subtab-hist-sesiones').addEventListener('click', function () {
+      $('subtab-hist-sesiones').classList.add('on');
+      $('subtab-hist-resumen').classList.remove('on');
+      mostrar('vista-hist-sesiones');
+      ocultar('vista-hist-resumen');
+    });
+    $('subtab-hist-resumen').addEventListener('click', function () {
+      $('subtab-hist-resumen').classList.add('on');
+      $('subtab-hist-sesiones').classList.remove('on');
+      ocultar('vista-hist-sesiones');
+      mostrar('vista-hist-resumen');
+      abrirResumen();
+    });
+
+    // Botones de cabecera y banners
+    $('btn-top-ajustes').addEventListener('click', pintarAjustes);
+    $('btn-ajustes-volver').addEventListener('click', function () { irATab('dashboard'); });
+    $('banner-activa-btn').addEventListener('click', abrirSesion);
+    $('banner-sesion-activa').addEventListener('click', abrirSesion);
+
+    // Sesión rápida / libre
+    $('btn-sesion-rapida').addEventListener('click', function () {
+      iniciarSesion({ nombre: 'Sesión libre', ejercicios: [] });
+    });
+
+    // Sesión activa
+    $('btn-volver-sesion').addEventListener('click', function () {
+      irATab('dashboard');
     });
     $('btn-guardar').addEventListener('click', guardarSesion);
     $('btn-descartar').addEventListener('click', descartarSesion);
-    $('btn-agregar-ejercicio').addEventListener('click', abrirSelector);
+    $('btn-agregar-ejercicio').addEventListener('click', function () { abrirSelector(); });
     $('selector-cerrar').addEventListener('click', cerrarSelector);
     $('btn-pendientes').addEventListener('click', sincronizar);
-
-    // Al teclear en cualquier casilla se refrescan los marcadores de la sesión.
-    $('lista-ejercicios').addEventListener('input', actualizarStatsSesion);
 
     $('chip-rpe').addEventListener('click', function () {
       prefs.rpe = !prefs.rpe; guardarPrefs();
@@ -1621,29 +2281,106 @@
       $('chip-notas').classList.toggle('on', prefs.notas);
       if (sesion) pintarEjercicios();
     });
+    $('chip-peso-hoy').addEventListener('click', function () {
+      var fila = $('fila-peso-sesion');
+      fila.classList.toggle('oculto');
+      $('chip-peso-hoy').classList.toggle('on', !fila.classList.contains('oculto'));
+    });
 
-    $('btn-historial').addEventListener('click', abrirHistorial);
-    $('btn-hist-volver').addEventListener('click', pintarInicio);
-    $('btn-det-volver').addEventListener('click', abrirHistorial);
+    // Rutinas y Editor
+    $('btn-nueva-rutina').addEventListener('click', function () { abrirEditorRutina(); });
+    $('btn-rutina-cerrar').addEventListener('click', function () { ocultar('modal-rutina-editor'); });
+    $('btn-rutina-guardar').addEventListener('click', guardarRutinaDesdeEditor);
+    $('btn-editor-add-ej').addEventListener('click', function () {
+      abrirSelector(function (ej) {
+        rutinaEditando.ejercicios.push({
+          nombre: ej.nombre, grupo: ej.grupo, tipo: ej.tipo || 'peso_reps',
+          series: 3, reps: '8-10', descanso: 90
+        });
+        pintarEjerciciosEditorRutina();
+      });
+    });
 
-    $('btn-progreso').addEventListener('click', function () { abrirProgreso(); });
-    $('btn-prog-volver').addEventListener('click', pintarInicio);
-    $('prog-ejercicio').addEventListener('change', function () { progMetricaId = null; renderProgreso(this.value); });
+    // Módulo de Peso
+    $('btn-registrar-peso').addEventListener('click', function () {
+      var v = $('peso-valor').value;
+      var f = $('peso-fecha').value;
+      var n = $('peso-nota').value;
+      registrarPeso(v, f, n);
+      $('peso-valor').value = '';
+      $('peso-nota').value = '';
+    });
 
-    $('btn-resumen').addEventListener('click', abrirResumen);
-    $('btn-res-volver').addEventListener('click', pintarInicio);
+    // Selector de ejercicio en Progreso
+    $('prog-ejercicio').addEventListener('change', function () {
+      progMetricaId = null;
+      renderProgreso(this.value);
+    });
 
-    $('btn-records').addEventListener('click', abrirRecords);
-    $('btn-rec-volver').addEventListener('click', pintarInicio);
+    // Detalle de sesión
+    $('btn-det-volver').addEventListener('click', function () { irATab('historial'); });
 
-    $('descanso-menos').addEventListener('click', function () { descansoRestante = Math.max(0, descansoRestante - 15); pintarDescanso(); });
-    $('descanso-mas').addEventListener('click', function () { descansoRestante += 15; pintarDescanso(); });
-    $('descanso-saltar').addEventListener('click', function () { clearInterval(descansoInt); ocultar('descanso'); });
+    // Descanso flotante
+    $('descanso-menos').addEventListener('click', function () {
+      descansoRestante = Math.max(0, descansoRestante - 15);
+      actualizarDescansoUI();
+    });
+    $('descanso-mas').addEventListener('click', function () {
+      descansoRestante += 15;
+      actualizarDescansoUI();
+    });
+    $('descanso-pausa').addEventListener('click', function () {
+      descansoPausado = !descansoPausado;
+      $('descanso-pausa').textContent = descansoPausado ? 'Reanudar' : 'Pausar';
+    });
+    $('descanso-saltar').addEventListener('click', function () {
+      clearInterval(descansoInt);
+      ocultar('descanso');
+    });
+
+    // Modal de técnica
+    $('btn-tecnica-cerrar').addEventListener('click', function () { ocultar('modal-tecnica'); });
+
+    // Ajustes
+    $('btn-ajuste-audio').addEventListener('click', function () {
+      prefs.audioDescanso = !prefs.audioDescanso; guardarPrefs();
+      $('btn-ajuste-audio').textContent = prefs.audioDescanso ? 'Activado' : 'Silenciado';
+      $('btn-ajuste-audio').classList.toggle('on', prefs.audioDescanso);
+    });
+    $('btn-ajuste-vibrar').addEventListener('click', function () {
+      prefs.vibrarDescanso = !prefs.vibrarDescanso; guardarPrefs();
+      $('btn-ajuste-vibrar').textContent = prefs.vibrarDescanso ? 'Activada' : 'Desactivada';
+      $('btn-ajuste-vibrar').classList.toggle('on', prefs.vibrarDescanso);
+    });
+    $('btn-ajuste-anim').addEventListener('click', function () {
+      prefs.animaciones = !prefs.animaciones; guardarPrefs();
+      $('btn-ajuste-anim').textContent = prefs.animaciones ? 'Activadas' : 'Pausadas';
+      $('btn-ajuste-anim').classList.toggle('on', prefs.animaciones);
+      document.body.classList.toggle('sin-animaciones', !prefs.animaciones);
+    });
+    $('btn-probar-audio').addEventListener('click', function () {
+      reproducirAlertaDescanso();
+      vibrar([200, 100, 200]);
+    });
+    $('btn-cambiar-clave').addEventListener('click', function () {
+      var s = (window.prompt('Nueva clave de sincronización:') || '').trim();
+      if (s) {
+        localStorage.setItem(SECRETO_KEY, s);
+        aviso('Clave guardada.');
+      }
+    });
+    $('btn-exportar-datos').addEventListener('click', exportarDatos);
+    $('btn-importar-datos').addEventListener('click', function () {
+      $('input-archivo-importar').click();
+    });
+    $('input-archivo-importar').addEventListener('change', function () {
+      if (this.files && this.files[0]) importarDatos(this.files[0]);
+    });
 
     window.addEventListener('online', sincronizar);
 
     recuperarBorrador();
-    sincronizar(); // intenta subir lo que quedó pendiente
+    sincronizar();
 
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(function () {});
